@@ -7,11 +7,14 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.graphics.Typeface;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.StrictMode;
 import android.print.PrintAttributes;
 import android.print.PrintManager;
 import android.text.InputType;
@@ -27,6 +30,15 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.NumberFormat;
@@ -53,6 +65,9 @@ public class MainActivity extends Activity {
     private static final String[] ROLE_OPTIONS = new String[]{"Admin", "Cashier", "Collector", "Viewer"};
     private static final String[] ACTIVE_OPTIONS = new String[]{"Active", "Inactive"};
     private static final String[] LEDGER_STATUS_OPTIONS = new String[]{"Available", "Released", "Held", "Reversed"};
+    private static final int REQ_RESTORE_JSON = 501;
+    private static final int APP_DB_VERSION = 5;
+    private static final String[] BACKUP_TABLES = new String[]{"users", "clients", "loans", "schedule", "repayments", "audit_logs", "commission_settings", "collector_commission_rates", "commission_ledger", "commission_releases"};
 
     private Db db;
     private LinearLayout content;
@@ -67,6 +82,14 @@ public class MainActivity extends Activity {
         ensureDefaultCollectorRates();
         money.setMinimumFractionDigits(2);
         showLoginScreen();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_RESTORE_JSON && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            handleRestoreUri(data.getData());
+        }
     }
 
     private void showLoginScreen() {
@@ -228,6 +251,9 @@ public class MainActivity extends Activity {
         addAction("Commission Release", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
         addAction("Commission Release History", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
         addAction("Recalculate Commission", new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }});
+        addAction("Backup Data", new View.OnClickListener() { public void onClick(View v) { createAndShareBackup(false); }});
+        addAction("Restore Data", new View.OnClickListener() { public void onClick(View v) { showRestoreDataDialog(); }});
+        addAction("Export CSV", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
         addSection("Testing Tools");
         addCard("Audit Logs Viewer", "Review local actions recorded by the app: client changes, loan releases, payments, voids, cancellations, and passbook prints.", (String) null, (View.OnClickListener) null);
         addCard("Database Integrity Checker", "Checks client balances, loan balances, paid loan balances, cancelled-loan safeguards, and voided-payment exclusion.", (String) null, (View.OnClickListener) null);
@@ -242,6 +268,287 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Filter", (d, w) -> showAuditLogs(text(action)))
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private void createAndShareBackup(boolean silent) {
+        if (!silent && !requireAdmin()) return;
+        try {
+            File file = createBackupFile(silent ? "PreRestore" : "Backup");
+            if (!silent) {
+                audit(db.getWritableDatabase(), "Backup created", "backup", file.getName(), "Created local JSON backup", currentUsername());
+                shareFile(file, "application/json", "A&L Alalay Backup");
+                audit(db.getWritableDatabase(), "Backup shared", "backup", file.getName(), "Opened Android share sheet for backup", currentUsername());
+            }
+        } catch (Exception ex) {
+            if (!silent) toast("Backup failed: " + ex.getMessage());
+            audit(db.getWritableDatabase(), "Backup failed", "backup", "JSON", safe(ex.getMessage()), currentUsername());
+        }
+    }
+
+    private File createBackupFile(String label) throws Exception {
+        JSONObject root = new JSONObject();
+        JSONObject meta = new JSONObject();
+        meta.put("app", "A&L Alalay Microlending Services");
+        meta.put("format", "alalay-json-backup");
+        meta.put("database_version", APP_DB_VERSION);
+        meta.put("created_at", now());
+        meta.put("created_by", currentUsername());
+        root.put("metadata", meta);
+        JSONObject tables = new JSONObject();
+        SQLiteDatabase r = db.getReadableDatabase();
+        for (String table : BACKUP_TABLES) {
+            tables.put(table, tableToJson(r, table));
+        }
+        root.put("tables", tables);
+        File file = new File(backupDir(), "A&L_" + label + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".json");
+        writeText(file, root.toString(2));
+        return file;
+    }
+
+    private JSONArray tableToJson(SQLiteDatabase r, String table) throws Exception {
+        JSONArray rows = new JSONArray();
+        Cursor c = r.rawQuery("SELECT * FROM " + table, null);
+        try {
+            while (c.moveToNext()) {
+                JSONObject row = new JSONObject();
+                for (int i = 0; i < c.getColumnCount(); i++) {
+                    String col = c.getColumnName(i);
+                    int type = c.getType(i);
+                    if (type == Cursor.FIELD_TYPE_NULL) row.put(col, JSONObject.NULL);
+                    else if (type == Cursor.FIELD_TYPE_INTEGER) row.put(col, c.getLong(i));
+                    else if (type == Cursor.FIELD_TYPE_FLOAT) row.put(col, c.getDouble(i));
+                    else row.put(col, c.getString(i));
+                }
+                rows.put(row);
+            }
+        } finally {
+            c.close();
+        }
+        return rows;
+    }
+
+    private void showRestoreDataDialog() {
+        if (!requireAdmin()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Restore Data")
+                .setMessage("Choose an A&L JSON backup file. Restore will validate the file, create an automatic pre-restore backup, then replace local app data. Continue?")
+                .setPositiveButton("Choose Backup", (d, w) -> {
+                    Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    pick.addCategory(Intent.CATEGORY_OPENABLE);
+                    pick.setType("*/*");
+                    startActivityForResult(pick, REQ_RESTORE_JSON);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void handleRestoreUri(final Uri uri) {
+        if (!requireAdmin()) return;
+        try {
+            final String text = readUriText(uri);
+            final JSONObject backup = new JSONObject(text);
+            validateBackupJson(backup);
+            JSONObject meta = backup.getJSONObject("metadata");
+            new AlertDialog.Builder(this)
+                    .setTitle("Confirm Restore")
+                    .setMessage("Backup created: " + safe(meta.optString("created_at")) +
+                            "\nDatabase version: " + meta.optInt("database_version") +
+                            "\n\nThis will replace local data. A pre-restore backup will be created first.")
+                    .setPositiveButton("Restore Now", (d, w) -> restoreBackupJson(backup))
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        } catch (Exception ex) {
+            toast("Invalid backup file: " + ex.getMessage());
+            audit(db.getWritableDatabase(), "Restore failed", "backup", "validation", safe(ex.getMessage()), currentUsername());
+        }
+    }
+
+    private void validateBackupJson(JSONObject backup) throws Exception {
+        if (!backup.has("metadata") || !backup.has("tables")) throw new Exception("Missing metadata or tables.");
+        JSONObject meta = backup.getJSONObject("metadata");
+        if (!"alalay-json-backup".equals(meta.optString("format"))) throw new Exception("Not an A&L backup file.");
+        int version = meta.optInt("database_version", -1);
+        if (version < 1) throw new Exception("Missing database version.");
+        if (version > APP_DB_VERSION) throw new Exception("Backup version is newer than this app.");
+        JSONObject tables = backup.getJSONObject("tables");
+        for (String table : BACKUP_TABLES) {
+            if (!tables.has(table)) throw new Exception("Missing table: " + table);
+            if (!(tables.get(table) instanceof JSONArray)) throw new Exception("Invalid table data: " + table);
+        }
+    }
+
+    private void restoreBackupJson(JSONObject backup) {
+        String actor = currentUsername();
+        try {
+            File pre = createBackupFile("PreRestore");
+            audit(db.getWritableDatabase(), "Restore started", "backup", pre.getName(), "Pre-restore backup created", actor);
+            SQLiteDatabase s = db.getWritableDatabase();
+            s.beginTransaction();
+            try {
+                s.execSQL("PRAGMA foreign_keys=OFF");
+                for (int i = BACKUP_TABLES.length - 1; i >= 0; i--) {
+                    s.delete(BACKUP_TABLES[i], null, null);
+                }
+                JSONObject tables = backup.getJSONObject("tables");
+                for (String table : BACKUP_TABLES) {
+                    JSONArray rows = tables.getJSONArray(table);
+                    for (int i = 0; i < rows.length(); i++) {
+                        s.insertOrThrow(table, null, jsonRowToValues(rows.getJSONObject(i)));
+                    }
+                }
+                audit(s, "Restore started", "backup", pre.getName(), "Validated backup and imported tables", actor);
+                audit(s, "Restore completed", "backup", "JSON", "Restored backup and replaced local data", actor);
+                s.setTransactionSuccessful();
+            } finally {
+                s.endTransaction();
+                s.execSQL("PRAGMA foreign_keys=ON");
+            }
+            ensureDefaultCollectorRates();
+            toast("Restore completed. Please login again and run System Check.");
+            showLoginScreen();
+        } catch (Exception ex) {
+            toast("Restore failed: " + ex.getMessage());
+            audit(db.getWritableDatabase(), "Restore failed", "backup", "JSON", safe(ex.getMessage()), actor);
+        }
+    }
+
+    private ContentValues jsonRowToValues(JSONObject row) throws Exception {
+        ContentValues v = new ContentValues();
+        JSONArray names = row.names();
+        if (names == null) return v;
+        for (int i = 0; i < names.length(); i++) {
+            String key = names.getString(i);
+            Object val = row.get(key);
+            if (val == JSONObject.NULL) v.putNull(key);
+            else if (val instanceof Integer) v.put(key, (Integer) val);
+            else if (val instanceof Long) v.put(key, (Long) val);
+            else if (val instanceof Double) v.put(key, (Double) val);
+            else if (val instanceof Boolean) v.put(key, ((Boolean) val) ? 1 : 0);
+            else v.put(key, String.valueOf(val));
+        }
+        return v;
+    }
+
+    private void showCsvExportMenu() {
+        if (!requirePermission(canViewReports())) return;
+        ArrayList<String> labels = new ArrayList<>();
+        if (isAdmin() || isViewer()) {
+            labels.add("Clients CSV");
+            labels.add("Loans CSV");
+        }
+        if (isAdmin() || isViewer() || isCashier() || isCollector()) {
+            labels.add("Repayments CSV");
+            labels.add("Daily Collection CSV");
+            labels.add("Weekly Collection CSV");
+            labels.add("Overdue CSV");
+        }
+        if (canViewCommissionReports()) {
+            labels.add("Commission Summary CSV");
+            labels.add("Commission Release CSV");
+        }
+        final String[] items = labels.toArray(new String[0]);
+        new AlertDialog.Builder(this)
+                .setTitle("Export CSV")
+                .setItems(items, (d, which) -> exportCsv(items[which]))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void exportCsv(String type) {
+        try {
+            CsvSpec spec = csvSpec(type);
+            if (spec == null) { notAllowed(); return; }
+            File file = writeCsv(spec.filePrefix, spec.sql, spec.args);
+            audit(db.getWritableDatabase(), "CSV export created", "csv_export", file.getName(), "Exported " + type, currentUsername());
+            shareFile(file, "text/csv", "A&L CSV Export");
+        } catch (Exception ex) {
+            toast("CSV export failed: " + ex.getMessage());
+            audit(db.getWritableDatabase(), "CSV export failed", "csv_export", type, safe(ex.getMessage()), currentUsername());
+        }
+    }
+
+    private CsvSpec csvSpec(String type) {
+        String today = ISO.format(new Date());
+        Calendar end = Calendar.getInstance();
+        end.add(Calendar.DAY_OF_MONTH, 6);
+        String weekEnd = ISO.format(end.getTime());
+        if ("Clients CSV".equals(type)) {
+            if (!(isAdmin() || isViewer())) return null;
+            return new CsvSpec("Clients", scopedClientRowsSql("COALESCE(active,1)=1 ORDER BY name"), scopedArgs());
+        }
+        if ("Loans CSV".equals(type)) {
+            if (!(isAdmin() || isViewer())) return null;
+            return new CsvSpec("Loans", scopedLoanRowsSql("1=1 ORDER BY release_date DESC"), scopedArgs());
+        }
+        if ("Repayments CSV".equals(type)) {
+            ArrayList<String> args = new ArrayList<>();
+            String where = "1=1";
+            if (isCollector()) {
+                where += reportCollectorClauseWithAlias(new ReportFilter("", "", currentUser.collectorName, "All", "All", "All", "All"), args, "l");
+            }
+            return new CsvSpec("Repayments", "SELECT r.payment_id,r.receipt_number,r.loan_id,r.client_id,r.client_name,r.payment_date,r.amount,r.method,r.posted_by,r.voided,r.void_reason,l.collector FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE " + where + " ORDER BY r.payment_date DESC,r.encoded_at DESC", args.toArray(new String[0]));
+        }
+        if ("Daily Collection CSV".equals(type)) {
+            ReportFilter f = new ReportFilter(today, today, isCollector() ? currentUser.collectorName : "All", "All", "All", "All", "All");
+            ArrayList<String> args = new ArrayList<>();
+            String where = reportPaymentWhere(f, args, true);
+            return new CsvSpec("Daily_Collection", "SELECT r.client_name,r.loan_id,r.receipt_number,r.amount,r.method,r.posted_by,r.payment_date,r.encoded_at,r.voided,l.collector FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE " + where + " ORDER BY r.encoded_at DESC", args.toArray(new String[0]));
+        }
+        if ("Weekly Collection CSV".equals(type)) {
+            ReportFilter f = new ReportFilter(today, weekEnd, isCollector() ? currentUser.collectorName : "All", "All", "All", "All", "All");
+            ArrayList<String> args = new ArrayList<>();
+            String where = reportScheduleWhere(f, args);
+            return new CsvSpec("Weekly_Collection", "SELECT l.client_name,l.loan_id,l.collector,s.installment_no,s.due_date,s.scheduled_amount,s.paid_to_date,l.balance,s.status FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE " + where + " ORDER BY s.due_date,l.client_name", args.toArray(new String[0]));
+        }
+        if ("Overdue CSV".equals(type)) {
+            ArrayList<String> args = new ArrayList<>();
+            args.add(today);
+            String where = "s.status!='Paid' AND s.due_date<?";
+            if (isCollector()) { where += " AND UPPER(COALESCE(l.collector,''))=UPPER(?)"; args.add(currentUser.collectorName); }
+            return new CsvSpec("Overdue", "SELECT l.client_name,c.phone,c.address,l.loan_id,l.collector,s.due_date,s.scheduled_amount,s.paid_to_date,s.status FROM schedule s JOIN loans l ON l.loan_id=s.loan_id LEFT JOIN clients c ON c.client_id=l.client_id WHERE " + where + " ORDER BY s.due_date ASC", args.toArray(new String[0]));
+        }
+        if ("Commission Summary CSV".equals(type)) {
+            String where = "1=1";
+            String[] args = null;
+            if (isCollector()) { where = "UPPER(COALESCE(collector,''))=UPPER(?)"; args = new String[]{currentUser.collectorName}; }
+            return new CsvSpec("Commission_Summary", "SELECT collector,status,COALESCE(SUM(computed_commission),0) AS total_commission,COUNT(*) AS rows_count FROM commission_ledger WHERE " + where + " GROUP BY collector,status ORDER BY collector,status", args);
+        }
+        if ("Commission Release CSV".equals(type)) {
+            String where = "1=1";
+            String[] args = null;
+            if (isCollector()) { where = "UPPER(COALESCE(collector,''))=UPPER(?)"; args = new String[]{currentUser.collectorName}; }
+            return new CsvSpec("Commission_Releases", "SELECT release_number,release_date,collector,amount,method,remarks,released_by,status FROM commission_releases WHERE " + where + " ORDER BY release_date DESC", args);
+        }
+        return null;
+    }
+
+    private File writeCsv(String prefix, String sql, String[] args) throws Exception {
+        StringBuilder out = new StringBuilder();
+        Cursor c = db.getReadableDatabase().rawQuery(sql, args);
+        try {
+            for (int i = 0; i < c.getColumnCount(); i++) {
+                if (i > 0) out.append(",");
+                out.append(csv(c.getColumnName(i)));
+            }
+            out.append("\n");
+            while (c.moveToNext()) {
+                for (int i = 0; i < c.getColumnCount(); i++) {
+                    if (i > 0) out.append(",");
+                    out.append(csv(c.getString(i)));
+                }
+                out.append("\n");
+            }
+        } finally {
+            c.close();
+        }
+        File file = new File(backupDir(), "A&L_" + prefix + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".csv");
+        writeText(file, out.toString());
+        return file;
+    }
+
+    private String csv(String value) {
+        String v = safe(value).replace("\"", "\"\"");
+        return "\"" + v + "\"";
     }
 
     private void showAuditLogs(String actionFilter) {
@@ -988,6 +1295,7 @@ public class MainActivity extends Activity {
         addAction("Commission Summary Report", new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }});
         addAction("Commission Release Report", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
         addAction("Collector Commission Balance Report", new View.OnClickListener() { public void onClick(View v) { showCommissionBalanceReport(); }});
+        addAction("Export CSV", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
     }
 
     private void showReportFilter(String report, String mode, boolean collectorField, boolean methodField, boolean releasedByField) {
@@ -2905,6 +3213,47 @@ public class MainActivity extends Activity {
         String v = safe(value).trim().toLowerCase(Locale.US);
         return v.equals("0") || v.equals("inactive") || v.equals("disabled") || v.equals("no");
     }
+    private File backupDir() {
+        File base = getExternalFilesDir(null);
+        if (base == null) base = getFilesDir();
+        File dir = new File(base, "alalay_backups");
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
+    }
+    private void writeText(File file, String text) throws Exception {
+        OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), "UTF-8");
+        try {
+            writer.write(text);
+        } finally {
+            writer.close();
+        }
+    }
+    private String readUriText(Uri uri) throws Exception {
+        InputStream in = getContentResolver().openInputStream(uri);
+        if (in == null) throw new Exception("Could not open selected file.");
+        BufferedReader reader = new BufferedReader(new InputStreamReader(in, "UTF-8"));
+        try {
+            StringBuilder out = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) out.append(line).append("\n");
+            return out.toString();
+        } finally {
+            reader.close();
+        }
+    }
+    private void shareFile(File file, String mime, String title) {
+        try {
+            StrictMode.class.getMethod("disableDeathOnFileUriExposure").invoke(null);
+        } catch (Exception ignored) {
+        }
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType(mime);
+        share.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(file));
+        share.putExtra(Intent.EXTRA_SUBJECT, file.getName());
+        share.putExtra(Intent.EXTRA_TEXT, "A&L Alalay export: " + file.getName());
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(share, title));
+    }
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
 
@@ -2978,6 +3327,16 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static class CsvSpec {
+        final String filePrefix, sql;
+        final String[] args;
+        CsvSpec(String filePrefix, String sql, String[] args) {
+            this.filePrefix = filePrefix;
+            this.sql = sql;
+            this.args = args;
+        }
+    }
+
     private static class CommissionSetting {
         final double rate;
         final String type, effectiveDate;
@@ -3005,7 +3364,7 @@ public class MainActivity extends Activity {
     }
 
     public static class Db extends SQLiteOpenHelper {
-        Db(Context c) { super(c, "alalay.db", null, 5); }
+        Db(Context c) { super(c, "alalay.db", null, APP_DB_VERSION); }
 
         @Override
         public void onConfigure(SQLiteDatabase db) {
