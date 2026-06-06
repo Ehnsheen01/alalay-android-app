@@ -46,6 +46,13 @@ public class MainActivity extends Activity {
     private static final int LINE = 0xffdbe3ef;
     private static final Locale PH = new Locale("en", "PH");
     private static final SimpleDateFormat ISO = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+    private static final String[] COLLECTOR_NAMES = new String[]{"LEO PELIN", "SHEGFRED CABANA", "RASHIEM MORATA", "EHVAN PABUAYA"};
+    private static final double[] COLLECTOR_RATES = new double[]{0.035, 0.02, 0.02, 0.02};
+    private static final String[] PAYMENT_METHODS = new String[]{"Cash", "GCash", "Bank Transfer", "Other"};
+    private static final String[] PAYMENT_METHOD_FILTERS = new String[]{"All", "Cash", "GCash", "Bank Transfer", "Other"};
+    private static final String[] ROLE_OPTIONS = new String[]{"Admin", "Cashier", "Collector", "Viewer"};
+    private static final String[] ACTIVE_OPTIONS = new String[]{"Active", "Inactive"};
+    private static final String[] LEDGER_STATUS_OPTIONS = new String[]{"Available", "Released", "Held", "Reversed"};
 
     private Db db;
     private LinearLayout content;
@@ -510,8 +517,8 @@ public class MainActivity extends Activity {
         password.setInputType(0x00000081);
         final EditText role = input("Role: Admin / Cashier / Collector / Viewer");
         final EditText collector = input("Collector Name for Collector role");
-        final EditText active = input("Active: 1 or 0");
-        active.setText("1");
+        final EditText active = input("Status: Active / Inactive");
+        active.setText("Active");
         if (userId != null) {
             Cursor c = db.getReadableDatabase().rawQuery("SELECT full_name,username,role,collector_name,active FROM users WHERE id=?", new String[]{String.valueOf(userId)});
             if (c.moveToFirst()) {
@@ -520,7 +527,7 @@ public class MainActivity extends Activity {
                 username.setEnabled(false);
                 role.setText(c.getString(2));
                 collector.setText(c.getString(3));
-                active.setText(String.valueOf(c.getInt(4)));
+                active.setText(c.getInt(4) == 1 ? "Active" : "Inactive");
             }
             c.close();
         } else {
@@ -529,7 +536,7 @@ public class MainActivity extends Activity {
         Button pickRole = new Button(this);
         pickRole.setText("Pick Role");
         pickRole.setAllCaps(false);
-        pickRole.setOnClickListener(v -> showOptionPicker("Role", role, new String[]{"Admin", "Cashier", "Collector", "Viewer"}));
+        pickRole.setOnClickListener(v -> showOptionPicker("Role", role, ROLE_OPTIONS));
         Button pickCollector = new Button(this);
         pickCollector.setText("Pick Collector");
         pickCollector.setAllCaps(false);
@@ -537,7 +544,7 @@ public class MainActivity extends Activity {
         Button pickActive = new Button(this);
         pickActive.setText("Pick Active Status");
         pickActive.setAllCaps(false);
-        pickActive.setOnClickListener(v -> showOptionPicker("Active", active, new String[]{"1", "0"}));
+        pickActive.setOnClickListener(v -> showOptionPicker("Active", active, ACTIVE_OPTIONS));
         form.addView(fullName); form.addView(username); form.addView(password); form.addView(role); form.addView(pickRole); form.addView(collector); form.addView(pickCollector); form.addView(active); form.addView(pickActive);
         new AlertDialog.Builder(this)
                 .setTitle(userId == null ? "Add User" : "Edit User")
@@ -547,6 +554,7 @@ public class MainActivity extends Activity {
                     if (userId == null && blank(password)) { toast("Password is required for new users."); return; }
                     String normalizedRole = normalizeRole(text(role));
                     if (normalizedRole.isEmpty()) { toast("Role must be Admin, Cashier, Collector, or Viewer."); return; }
+                    if ("Collector".equals(normalizedRole) && canonicalCollector(text(collector)).isEmpty()) { toast("Collector role requires a picked collector name."); return; }
                     SQLiteDatabase s = db.getWritableDatabase();
                     ContentValues v = new ContentValues();
                     v.put("full_name", text(fullName));
@@ -554,7 +562,7 @@ public class MainActivity extends Activity {
                     if (!blank(password)) v.put("password_hash", hashPassword(text(password)));
                     v.put("role", normalizedRole);
                     v.put("collector_name", canonicalCollector(text(collector)));
-                    v.put("active", "0".equals(text(active)) ? 0 : 1);
+                    v.put("active", isInactiveText(text(active)) ? 0 : 1);
                     v.put("updated_at", now());
                     if (userId == null) {
                         v.put("created_at", now());
@@ -659,11 +667,22 @@ public class MainActivity extends Activity {
     }
 
     private void showSearchMenu() {
+        ArrayList<String> labels = new ArrayList<>();
+        labels.add("Search Clients");
+        labels.add("Search Loans");
+        labels.add("Payment History by Borrower");
+        labels.add("Payment History by Loan");
+        if (canVoidPayment()) labels.add("Void Payment by Loan");
+        final String[] items = labels.toArray(new String[0]);
         new AlertDialog.Builder(this)
                 .setTitle("Search")
-                .setItems(new String[]{"Search Clients", "Search Loans"}, (d, which) -> {
-                    if (which == 0) showClientSearchDialog();
-                    else showLoanSearchDialog();
+                .setItems(items, (d, which) -> {
+                    String picked = items[which];
+                    if ("Search Clients".equals(picked)) showClientSearchDialog();
+                    else if ("Search Loans".equals(picked)) showLoanSearchDialog();
+                    else if ("Payment History by Borrower".equals(picked)) showPaymentHistoryBorrowerPicker();
+                    else if ("Payment History by Loan".equals(picked)) showPaymentHistoryLoanPicker();
+                    else if ("Void Payment by Loan".equals(picked)) showVoidPaymentByLoanPicker();
                 })
                 .show();
     }
@@ -676,8 +695,8 @@ public class MainActivity extends Activity {
         showSearchPicker(
                 "Pick Borrower",
                 "Search borrower name, phone, address, or ID",
-                "SELECT client_id,name,phone,address FROM clients WHERE client_id LIKE ? OR name LIKE ? OR phone LIKE ? OR address LIKE ? ORDER BY name LIMIT 50",
-                new String[]{"client_id", "name", "phone", "address"},
+                "SELECT client_id,name,phone,address,collector FROM clients WHERE client_id LIKE ? OR name LIKE ? OR phone LIKE ? OR address LIKE ? ORDER BY name LIMIT 50",
+                new String[]{"Client ID", "Borrower", "Contact", "Address", "Collector"},
                 new PickCallback() {
                     public void onPick(String id, String label) {
                         targetClientId.setText(id);
@@ -687,15 +706,21 @@ public class MainActivity extends Activity {
     }
 
     private void showLoanPicker(final EditText targetLoanId, final TextView selectedLabel, final boolean allowClosedLoans) {
+        showLoanPickerForClient(targetLoanId, selectedLabel, allowClosedLoans, "");
+    }
+
+    private void showLoanPickerForClient(final EditText targetLoanId, final TextView selectedLabel, final boolean allowClosedLoans, String clientId) {
+        final boolean hasClient = !safe(clientId).trim().isEmpty() && !isAll(clientId);
         showSearchPicker(
                 allowClosedLoans ? "Pick Loan" : "Pick Active Loan",
                 "Search loan ID, borrower, or collector",
-                "SELECT l.loan_id,l.client_name,l.balance,l.status,l.collector,COALESCE(SUM(MAX(0,s.scheduled_amount-s.paid_to_date)),0) AS due_amount " +
+                "SELECT l.loan_id,l.client_name,l.balance,l.status,l.collector,COALESCE(SUM(CASE WHEN s.scheduled_amount-s.paid_to_date>0 THEN s.scheduled_amount-s.paid_to_date ELSE 0 END),0) AS due_amount " +
                         "FROM loans l LEFT JOIN schedule s ON s.loan_id=l.loan_id AND s.status!='Paid' " +
                         "WHERE (l.loan_id LIKE ? OR l.client_name LIKE ? OR l.collector LIKE ? OR l.client_id LIKE ?) " +
+                        (hasClient ? "AND l.client_id='" + safe(clientId).replace("'", "''") + "' " : "") +
                         (allowClosedLoans ? "" : "AND l.status='Active' ") +
                         "GROUP BY l.loan_id ORDER BY l.client_name LIMIT 50",
-                new String[]{"loan_id", "client_name", "balance", "status", "collector", "due_amount"},
+                new String[]{"Loan Account", "Borrower", "Balance", "Status", "Collector", "Due Amount"},
                 new PickCallback() {
                     public void onPick(String id, String label) {
                         targetLoanId.setText(id);
@@ -708,15 +733,16 @@ public class MainActivity extends Activity {
         showSearchPicker(
                 "Pick Collector",
                 "Search collector",
-                "SELECT collector_name,collector_name,commission_rate,active FROM collector_commission_rates WHERE collector_name LIKE ? " +
+                "SELECT collector_name,collector_name,commission_rate,active FROM collector_commission_rates WHERE collector_name LIKE ? AND collector_name IN ('LEO PELIN','SHEGFRED CABANA','RASHIEM MORATA','EHVAN PABUAYA') " +
+                        "UNION SELECT collector_name,collector_name,commission_rate,active FROM collector_commission_rates WHERE collector_name LIKE ? " +
                         "UNION SELECT collector_name,collector_name,0,active FROM users WHERE role='Collector' AND active=1 AND collector_name LIKE ? " +
                         "UNION SELECT collector,collector,0,1 FROM clients WHERE COALESCE(collector,'')!='' AND collector LIKE ? " +
                         "UNION SELECT collector,collector,0,1 FROM loans WHERE COALESCE(collector,'')!='' AND collector LIKE ? " +
                         "ORDER BY 1 LIMIT 50",
-                new String[]{"collector_name", "collector_name", "commission_rate", "active"},
+                new String[]{"Collector", "Collector Name", "Commission Rate", "Active"},
                 new PickCallback() {
                     public void onPick(String id, String label) {
-                        target.setText(id);
+                        target.setText(canonicalCollector(id));
                     }
                 });
     }
@@ -814,6 +840,101 @@ public class MainActivity extends Activity {
         return count;
     }
 
+    private void showPaymentHistoryBorrowerPicker() {
+        if (!requirePermission(canViewPaymentHistory())) return;
+        final EditText clientId = input("Client ID");
+        final TextView selected = new TextView(this);
+        selected.setText("No borrower selected.");
+        Button pick = new Button(this);
+        pick.setText("Pick Borrower");
+        pick.setAllCaps(false);
+        pick.setOnClickListener(v -> showBorrowerPicker(clientId, selected));
+        LinearLayout form = form();
+        form.addView(selected);
+        form.addView(clientId);
+        form.addView(pick);
+        new AlertDialog.Builder(this)
+                .setTitle("Borrower Payment History")
+                .setView(form)
+                .setPositiveButton("Open", (d, w) -> {
+                    if (blank(clientId)) { toast("Borrower is required."); return; }
+                    showPaymentHistoryForClient(text(clientId));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showPaymentHistoryLoanPicker() {
+        if (!requirePermission(canViewPaymentHistory())) return;
+        final EditText loanId = input("Loan ID");
+        final TextView selected = new TextView(this);
+        selected.setText("No loan selected.");
+        Button pick = new Button(this);
+        pick.setText("Pick Loan");
+        pick.setAllCaps(false);
+        pick.setOnClickListener(v -> showLoanPicker(loanId, selected, true));
+        LinearLayout form = form();
+        form.addView(selected);
+        form.addView(loanId);
+        form.addView(pick);
+        new AlertDialog.Builder(this)
+                .setTitle("Loan Payment History")
+                .setView(form)
+                .setPositiveButton("Open", (d, w) -> {
+                    if (blank(loanId)) { toast("Loan is required."); return; }
+                    showPaymentHistoryForLoan(text(loanId));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showVoidPaymentByLoanPicker() {
+        if (!requirePermission(canVoidPayment())) return;
+        final EditText loanId = input("Loan ID");
+        final TextView selected = new TextView(this);
+        selected.setText("No loan selected.");
+        Button pick = new Button(this);
+        pick.setText("Pick Loan");
+        pick.setAllCaps(false);
+        pick.setOnClickListener(v -> showLoanPicker(loanId, selected, true));
+        LinearLayout form = form();
+        form.addView(selected);
+        form.addView(loanId);
+        form.addView(pick);
+        new AlertDialog.Builder(this)
+                .setTitle("Void Payment")
+                .setView(form)
+                .setPositiveButton("Choose Payment", (d, w) -> {
+                    if (blank(loanId)) { toast("Loan is required."); return; }
+                    showPaymentPickerForVoid(text(loanId));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showPaymentPickerForVoid(String loanId) {
+        LoanRow lr = findLoan(loanId);
+        if (lr == null) { toast("Loan not found."); return; }
+        if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT payment_id,receipt_number,payment_date,amount,method,posted_by FROM repayments WHERE loan_id=? AND voided=0 ORDER BY payment_date DESC, encoded_at DESC", new String[]{loanId});
+        ArrayList<String> ids = new ArrayList<>();
+        ArrayList<String> labels = new ArrayList<>();
+        try {
+            while (c.moveToNext()) {
+                ids.add(c.getString(0));
+                labels.add(safe(c.getString(1)) + " | " + safe(c.getString(2)) + " | " + peso(c.getDouble(3)) + " | " + safe(c.getString(4)) + " | " + safe(c.getString(5)));
+            }
+        } finally {
+            c.close();
+        }
+        if (ids.isEmpty()) { toast("No active payments found for this loan."); return; }
+        new AlertDialog.Builder(this)
+                .setTitle("Pick Payment to Void")
+                .setItems(labels.toArray(new String[0]), (d, which) -> showVoidPaymentDialog(ids.get(which)))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private void showClientSearchDialog() {
         final EditText q = input("Client name, ID, phone, address, collector");
         new AlertDialog.Builder(this)
@@ -859,7 +980,7 @@ public class MainActivity extends Activity {
         clear("Reports");
         addAction("Daily Collection Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Daily Collection", "today", true, true, false); }});
         addAction("Weekly Collection Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Weekly Collection", "week", true, false, false); }});
-        addAction("Overdue Report", new View.OnClickListener() { public void onClick(View v) { showOverdueReport(new ReportFilter("", ISO.format(new Date()), "", "All", "")); }});
+        addAction("Overdue Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Overdue", "today", true, false, false); }});
         addAction("Loan Release Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Loan Release", "range", true, false, true); }});
         addAction("Fully Paid Loans Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Fully Paid Loans", "range", true, false, false); }});
         addAction("Cancelled / Voided Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Cancelled / Voided", "range", true, false, false); }});
@@ -877,6 +998,12 @@ public class MainActivity extends Activity {
         final EditText collector = input("Collector or All");
         final EditText method = input("Method: Cash / GCash / Bank Transfer / All");
         final EditText releasedBy = input("Released by or All");
+        final EditText borrowerId = input("Borrower Client ID or All");
+        final EditText loanId = input("Loan ID or All");
+        final TextView selectedBorrower = new TextView(this);
+        final TextView selectedLoan = new TextView(this);
+        selectedBorrower.setText("Borrower: All");
+        selectedLoan.setText("Loan: All");
         String today = ISO.format(new Date());
         start.setText(today);
         if (mode.equals("week")) {
@@ -894,6 +1021,8 @@ public class MainActivity extends Activity {
         }
         method.setText("All");
         releasedBy.setText("All");
+        borrowerId.setText("All");
+        loanId.setText("All");
         form.addView(start);
         Button pickStart = new Button(this);
         pickStart.setText(mode.equals("today") ? "Pick Date" : "Pick Start Date");
@@ -916,12 +1045,36 @@ public class MainActivity extends Activity {
             pickCollector.setOnClickListener(v -> showCollectorPicker(collector));
             form.addView(pickCollector);
         }
+        form.addView(selectedBorrower);
+        form.addView(borrowerId);
+        Button pickBorrower = new Button(this);
+        pickBorrower.setText("Pick Borrower");
+        pickBorrower.setAllCaps(false);
+        pickBorrower.setOnClickListener(v -> showBorrowerPicker(borrowerId, selectedBorrower));
+        form.addView(pickBorrower);
+        Button allBorrowers = new Button(this);
+        allBorrowers.setText("All Borrowers");
+        allBorrowers.setAllCaps(false);
+        allBorrowers.setOnClickListener(v -> { borrowerId.setText("All"); selectedBorrower.setText("Borrower: All"); });
+        form.addView(allBorrowers);
+        form.addView(selectedLoan);
+        form.addView(loanId);
+        Button pickLoan = new Button(this);
+        pickLoan.setText("Pick Loan");
+        pickLoan.setAllCaps(false);
+        pickLoan.setOnClickListener(v -> showLoanPicker(loanId, selectedLoan, true));
+        form.addView(pickLoan);
+        Button allLoans = new Button(this);
+        allLoans.setText("All Loans");
+        allLoans.setAllCaps(false);
+        allLoans.setOnClickListener(v -> { loanId.setText("All"); selectedLoan.setText("Loan: All"); });
+        form.addView(allLoans);
         if (methodField) form.addView(method);
         if (methodField) {
             Button pickMethod = new Button(this);
             pickMethod.setText("Pick Method");
             pickMethod.setAllCaps(false);
-            pickMethod.setOnClickListener(v -> showOptionPicker("Method", method, new String[]{"All", "Cash", "GCash", "Bank Transfer", "Other"}));
+            pickMethod.setOnClickListener(v -> showOptionPicker("Method", method, PAYMENT_METHOD_FILTERS));
             form.addView(pickMethod);
         }
         if (releasedByField) form.addView(releasedBy);
@@ -929,9 +1082,11 @@ public class MainActivity extends Activity {
                 .setTitle(report + " Filter")
                 .setView(form)
                 .setPositiveButton("Run", (d, w) -> {
-                    ReportFilter f = new ReportFilter(text(start), mode.equals("today") ? text(start) : text(end), text(collector), text(method), text(releasedBy));
+                    if (!validDateOrBlank(start) || (!mode.equals("today") && !validDateOrBlank(end))) { toast("Use valid dates in YYYY-MM-DD format."); return; }
+                    ReportFilter f = new ReportFilter(text(start), mode.equals("today") ? text(start) : text(end), text(collector), text(method), text(releasedBy), text(borrowerId), text(loanId));
                     if (report.equals("Daily Collection")) showDailyCollectionReport(f);
                     else if (report.equals("Weekly Collection")) showWeeklyCollectionReport(f);
+                    else if (report.equals("Overdue")) showOverdueReport(f);
                     else if (report.equals("Loan Release")) showLoanReleaseReport(f);
                     else if (report.equals("Fully Paid Loans")) showFullyPaidLoansReport(f);
                     else if (report.equals("Cancelled / Voided")) showCancelledVoidedReport(f);
@@ -985,7 +1140,9 @@ public class MainActivity extends Activity {
         ArrayList<String> args = new ArrayList<>();
         String schedWhere = reportScheduleWhere(f, args);
         double expected = scalarDouble(r, "SELECT COALESCE(SUM(s.scheduled_amount),0) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE " + schedWhere, args.toArray(new String[0]));
-        double actual = scalarDouble(r, "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND r.payment_date BETWEEN ? AND ?" + reportCollectorClause(f, new ArrayList<String>()), reportPaymentRangeArgs(f));
+        ArrayList<String> payArgs = new ArrayList<>();
+        String payWhere = reportPaymentWhere(f, payArgs, false);
+        double actual = scalarDouble(r, "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND " + payWhere, payArgs.toArray(new String[0]));
         double unpaid = Math.max(0, expected - actual);
         double rate = expected > 0 ? (actual / expected) * 100.0 : 0;
         String summary = "Weekly Collection Report\nRange: " + f.startDate + " to " + f.endDate + "\nCollector: " + f.collector +
@@ -1021,6 +1178,7 @@ public class MainActivity extends Activity {
         args.add(f.endDate);
         String where = "s.status!='Paid' AND s.due_date<?";
         if (isCollector()) { where += " AND UPPER(COALESCE(l.collector,''))=UPPER(?)"; args.add(currentUser.collectorName); }
+        where += reportBorrowerLoanClause(f, args, "l");
         Cursor rows = db.getReadableDatabase().rawQuery("SELECT l.client_name,c.phone,l.loan_id,l.collector,s.due_date,s.scheduled_amount,s.paid_to_date,s.status FROM schedule s JOIN loans l ON l.loan_id=s.loan_id LEFT JOIN clients c ON c.client_id=l.client_id WHERE " + where + " ORDER BY s.due_date ASC", args.toArray(new String[0]));
         try {
             if (!rows.moveToFirst()) addEmpty("No overdue accounts found.");
@@ -1045,6 +1203,7 @@ public class MainActivity extends Activity {
         String where = "release_date BETWEEN ? AND ?";
         args.add(f.startDate); args.add(f.endDate);
         where += reportCollectorClause(f, args);
+        where += reportBorrowerLoanClause(f, args, null);
         if (!isAll(f.releasedBy)) { where += " AND UPPER(COALESCE(created_by,''))=UPPER(?)"; args.add(f.releasedBy); }
         double totalPrincipal = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(principal),0) FROM loans WHERE " + where, args.toArray(new String[0]));
         addCopySummary("Loan Release Report\nRange: " + f.startDate + " to " + f.endDate + "\nCollector: " + f.collector + "\nReleased by: " + f.releasedBy + "\nTotal principal: " + peso(totalPrincipal));
@@ -1070,6 +1229,7 @@ public class MainActivity extends Activity {
         ArrayList<String> args = new ArrayList<>();
         String where = "l.status='Paid'";
         where += reportCollectorClause(f, args);
+        where += reportBorrowerLoanClause(f, args, "l");
         args.add(f.startDate);
         args.add(f.endDate);
         Cursor rows = db.getReadableDatabase().rawQuery("SELECT l.client_name,l.loan_id,l.total_due,COALESCE(SUM(r.amount),0),MAX(r.payment_date),l.collector FROM loans l LEFT JOIN repayments r ON r.loan_id=l.loan_id AND r.voided=0 WHERE " + where + " GROUP BY l.loan_id HAVING MAX(r.payment_date) BETWEEN ? AND ? ORDER BY MAX(r.payment_date) DESC", args.toArray(new String[0]));
@@ -1094,6 +1254,7 @@ public class MainActivity extends Activity {
         String loanWhere = "status='Cancelled' AND COALESCE(cancelled_at,'') BETWEEN ? AND ?";
         args.add(f.startDate + " 00:00:00"); args.add(f.endDate + " 23:59:59");
         loanWhere += reportCollectorClause(f, args);
+        loanWhere += reportBorrowerLoanClause(f, args, null);
         addSection("Cancelled Loans");
         Cursor loans = db.getReadableDatabase().rawQuery("SELECT client_name,loan_id,total_due,cancel_reason,cancelled_by,cancelled_at,collector FROM loans WHERE " + loanWhere + " ORDER BY cancelled_at DESC", args.toArray(new String[0]));
         try {
@@ -1111,6 +1272,7 @@ public class MainActivity extends Activity {
         String payWhere = "r.voided=1 AND COALESCE(r.voided_at,'') BETWEEN ? AND ?";
         pargs.add(f.startDate + " 00:00:00"); pargs.add(f.endDate + " 23:59:59");
         payWhere += reportCollectorClauseWithAlias(f, pargs, "l");
+        payWhere += reportBorrowerLoanClause(f, pargs, "l");
         Cursor pays = db.getReadableDatabase().rawQuery("SELECT r.client_name,r.loan_id,r.receipt_number,r.amount,r.void_reason,r.voided_by,r.voided_at,l.collector FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE " + payWhere + " ORDER BY r.voided_at DESC", pargs.toArray(new String[0]));
         try {
             if (!pays.moveToFirst()) addEmpty("No voided payments found.");
@@ -1186,10 +1348,10 @@ public class MainActivity extends Activity {
         final EditText rate = numericInput("Commission rate decimal, e.g. 0.035");
         final EditText type = input("Type: Interest Percentage / Payment Percentage / Fixed Fully Paid");
         final EditText effective = input("Effective date yyyy-MM-dd");
-        final EditText active = input("Active: 1 or 0");
+        final EditText active = input("Status: Active / Inactive");
         type.setText("Principal Percentage");
         effective.setText(ISO.format(new Date()));
-        active.setText("1");
+        active.setText("Active");
         if (id != null) {
             Cursor c = db.getReadableDatabase().rawQuery("SELECT collector_name,commission_rate,commission_type,effective_date,active FROM collector_commission_rates WHERE id=?", new String[]{String.valueOf(id)});
             try {
@@ -1198,7 +1360,7 @@ public class MainActivity extends Activity {
                     rate.setText(String.valueOf(c.getDouble(1)));
                     type.setText(c.getString(2));
                     effective.setText(c.getString(3));
-                    active.setText(String.valueOf(c.getInt(4)));
+                    active.setText(c.getInt(4) == 1 ? "Active" : "Inactive");
                 }
             } finally { c.close(); }
         }
@@ -1217,7 +1379,7 @@ public class MainActivity extends Activity {
         Button pickActive = new Button(this);
         pickActive.setText("Pick Active");
         pickActive.setAllCaps(false);
-        pickActive.setOnClickListener(v -> showOptionPicker("Active", active, new String[]{"1", "0"}));
+        pickActive.setOnClickListener(v -> showOptionPicker("Active", active, ACTIVE_OPTIONS));
         form.addView(collector); form.addView(pickCollector); form.addView(rate); form.addView(type); form.addView(pickType); form.addView(effective); form.addView(pickDate); form.addView(active); form.addView(pickActive);
         new AlertDialog.Builder(this)
                 .setTitle(id == null ? "Add Collector Rate" : "Edit Collector Rate")
@@ -1225,7 +1387,8 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Save", (d, w) -> {
                     if (blank(collector)) { toast("Collector is required."); return; }
                     double r = number(rate);
-                    if (r < 0) { toast("Commission rate cannot be negative."); return; }
+                    if (!validNonNegativeDecimal(rate)) { toast("Commission rate must be a valid non-negative decimal."); return; }
+                    if (!validDateOrBlank(effective)) { toast("Effective date must use YYYY-MM-DD."); return; }
                     SQLiteDatabase s = db.getWritableDatabase();
                     ContentValues v = new ContentValues();
                     v.put("collector_name", canonicalCollector(text(collector)));
@@ -1233,7 +1396,7 @@ public class MainActivity extends Activity {
                     v.put("commission_rate", r);
                     v.put("commission_type", normalizeCommissionType(text(type)));
                     v.put("effective_date", text(effective).isEmpty() ? ISO.format(new Date()) : text(effective));
-                    v.put("active", "0".equals(text(active)) ? 0 : 1);
+                    v.put("active", isInactiveText(text(active)) ? 0 : 1);
                     v.put("updated_at", now());
                     if (id == null) {
                         v.put("created_at", now());
@@ -1257,11 +1420,11 @@ public class MainActivity extends Activity {
         pickCollector.setAllCaps(false);
         pickCollector.setOnClickListener(v -> showCollectorPicker(collector));
         final EditText amount = numericInput("Amount to release");
-        final EditText method = input("Method: Cash / GCash / Bank Transfer");
+        final EditText method = input("Method");
         Button pickMethod = new Button(this);
         pickMethod.setText("Pick Release Method");
         pickMethod.setAllCaps(false);
-        pickMethod.setOnClickListener(v -> showOptionPicker("Release Method", method, new String[]{"Cash", "GCash", "Bank Transfer", "Other"}));
+        pickMethod.setOnClickListener(v -> showOptionPicker("Release Method", method, PAYMENT_METHODS));
         final EditText releaseDate = input("Release Date yyyy-MM-dd");
         releaseDate.setText(ISO.format(new Date()));
         Button pickDate = new Button(this);
@@ -1277,9 +1440,10 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Preview/Release", (d, w) -> {
                     String col = canonicalCollector(text(collector));
                     if (col.isEmpty()) { toast("Collector is required."); return; }
+                    if (!validPositiveDecimal(amount)) { toast("Release amount must be a valid amount greater than zero."); return; }
+                    if (!validDateOrBlank(releaseDate)) { toast("Release date must use YYYY-MM-DD."); return; }
                     double available = commissionAvailable(col);
                     double amt = number(amount);
-                    if (amt <= 0) { toast("Release amount is required."); return; }
                     if (amt > available + 0.009) { toast("Release blocked. Available commission is only " + peso(available) + "."); return; }
                     if (blank(method)) { toast("Release method is required."); return; }
                     confirmCommissionRelease(col, amt, text(method), text(remarks), text(releaseDate).isEmpty() ? ISO.format(new Date()) : text(releaseDate), available);
@@ -1483,7 +1647,7 @@ public class MainActivity extends Activity {
         Button pickStatus = new Button(this);
         pickStatus.setText("Pick Status");
         pickStatus.setAllCaps(false);
-        pickStatus.setOnClickListener(v -> showOptionPicker("Client Status", status, new String[]{"Active", "Inactive"}));
+        pickStatus.setOnClickListener(v -> showOptionPicker("Client Status", status, ACTIVE_OPTIONS));
         form.addView(name); form.addView(phone); form.addView(address); form.addView(employment); form.addView(collector); form.addView(pickCollector); form.addView(status); form.addView(pickStatus);
         new AlertDialog.Builder(this)
                 .setTitle("Edit Client")
@@ -1539,7 +1703,7 @@ public class MainActivity extends Activity {
         Button pickReleaseMethod = new Button(this);
         pickReleaseMethod.setText("Pick Release Method");
         pickReleaseMethod.setAllCaps(false);
-        pickReleaseMethod.setOnClickListener(v -> showOptionPicker("Release Method", releasedThru, new String[]{"Cash", "GCash", "Bank Transfer", "Other"}));
+        pickReleaseMethod.setOnClickListener(v -> showOptionPicker("Release Method", releasedThru, PAYMENT_METHODS));
         final EditText releaseDate = input("Release Date yyyy-MM-dd");
         releaseDate.setText(ISO.format(new Date()));
         Button pickDate = new Button(this);
@@ -1553,9 +1717,13 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Release", (d, w) -> {
                     ClientRow cr = findClient(text(client));
                     if (cr == null) { toast("Client ID not found."); return; }
+                    if (!validPositiveDecimal(principal)) { toast("Principal must be a valid amount greater than zero."); return; }
+                    if (!validNonNegativeDecimal(rate)) { toast("Interest rate must be a valid non-negative decimal."); return; }
+                    if (!validPositiveInteger(weeks)) { toast("Term weeks must be a valid whole number greater than zero."); return; }
+                    if (!validDateOrBlank(releaseDate)) { toast("Release date must use YYYY-MM-DD."); return; }
+                    if (blank(releasedThru)) { toast("Release method is required."); return; }
                     double p = number(principal);
                     int term = (int) number(weeks);
-                    if (p <= 0 || term <= 0) { toast("Principal and term are required."); return; }
                     double interest = number(rate);
                     String loanId = nextId("LN", "loans", "loan_id");
                     double total = p + (p * interest);
@@ -1571,6 +1739,13 @@ public class MainActivity extends Activity {
     private void showCollectPaymentDialog(String loan) {
         if (!requirePermission(canPostPayment())) return;
         LinearLayout form = form();
+        final EditText clientId = input("Borrower Client ID (optional)");
+        final TextView selectedBorrower = new TextView(this);
+        selectedBorrower.setText("Borrower: All active loans");
+        Button pickBorrower = new Button(this);
+        pickBorrower.setText("Pick Borrower");
+        pickBorrower.setAllCaps(false);
+        pickBorrower.setOnClickListener(v -> showBorrowerPicker(clientId, selectedBorrower));
         final EditText loanId = input("Loan ID");
         loanId.setText(loan);
         final TextView selectedLoan = new TextView(this);
@@ -1578,14 +1753,14 @@ public class MainActivity extends Activity {
         Button pickLoan = new Button(this);
         pickLoan.setText("Pick Active Loan");
         pickLoan.setAllCaps(false);
-        pickLoan.setOnClickListener(v -> showLoanPicker(loanId, selectedLoan, false));
+        pickLoan.setOnClickListener(v -> showLoanPickerForClient(loanId, selectedLoan, false, text(clientId)));
         final EditText amount = numericInput("Amount");
-        final EditText method = input("Method: Cash / GCash / Bank Transfer");
+        final EditText method = input("Method");
         method.setText("Cash");
         Button pickMethod = new Button(this);
         pickMethod.setText("Pick Payment Method");
         pickMethod.setAllCaps(false);
-        pickMethod.setOnClickListener(v -> showOptionPicker("Payment Method", method, new String[]{"Cash", "GCash", "Bank Transfer", "Other"}));
+        pickMethod.setOnClickListener(v -> showOptionPicker("Payment Method", method, PAYMENT_METHODS));
         final EditText paymentDate = input("Payment Date yyyy-MM-dd");
         paymentDate.setText(ISO.format(new Date()));
         Button pickDate = new Button(this);
@@ -1595,7 +1770,7 @@ public class MainActivity extends Activity {
         final EditText postedBy = input("Collector / Cashier / Posted By");
         postedBy.setText(currentUsername());
         final EditText remarks = input("Remarks");
-        form.addView(selectedLoan); form.addView(loanId); form.addView(pickLoan); form.addView(amount); form.addView(method); form.addView(pickMethod); form.addView(paymentDate); form.addView(pickDate); form.addView(postedBy); form.addView(remarks);
+        form.addView(selectedBorrower); form.addView(clientId); form.addView(pickBorrower); form.addView(selectedLoan); form.addView(loanId); form.addView(pickLoan); form.addView(amount); form.addView(method); form.addView(pickMethod); form.addView(paymentDate); form.addView(pickDate); form.addView(postedBy); form.addView(remarks);
         new AlertDialog.Builder(this)
                 .setTitle("Post Repayment")
                 .setView(form)
@@ -1604,8 +1779,9 @@ public class MainActivity extends Activity {
                     if (lr == null) { toast("Loan not found."); return; }
                     if ("Paid".equalsIgnoreCase(lr.status)) { toast("This loan is already fully paid."); return; }
                     if ("Cancelled".equalsIgnoreCase(lr.status)) { toast("Cannot post payment to a cancelled loan."); return; }
+                    if (!validPositiveDecimal(amount)) { toast("Amount must be a valid amount greater than zero."); return; }
+                    if (!validDateOrBlank(paymentDate)) { toast("Payment date must use YYYY-MM-DD."); return; }
                     double a = number(amount);
-                    if (a <= 0) { toast("Amount is required."); return; }
                     if (blank(method)) { toast("Payment method is required."); return; }
                     if (blank(postedBy)) { toast("Collector/Cashier/Posted By is required."); return; }
                     if (isCollector() && !collectorOwnsLoan(lr.id)) { notAllowed(); return; }
@@ -1804,20 +1980,36 @@ public class MainActivity extends Activity {
                     PaymentRow pr = findPayment(paymentId);
                     if (pr == null) { toast("Payment not found."); return; }
                     if (pr.voided) { toast("Payment already voided."); return; }
+                    confirmVoidPayment(paymentId, pr, text(reason), text(user));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void confirmVoidPayment(String paymentId, PaymentRow pr, String reason, String user) {
+        new AlertDialog.Builder(this)
+                .setTitle("Confirm Void Payment")
+                .setMessage("Payment: " + paymentId +
+                        "\nLoan: " + pr.loanId +
+                        "\nAmount: " + peso(pr.amount) +
+                        "\nReason: " + reason +
+                        "\nVoided By: " + user +
+                        "\n\nThis keeps the original payment record and recalculates balances.")
+                .setPositiveButton("Confirm Void", (d, w) -> {
                     SQLiteDatabase s = db.getWritableDatabase();
                     s.beginTransaction();
                     try {
                         ContentValues v = new ContentValues();
                         v.put("voided", 1);
-                        v.put("void_reason", text(reason));
+                        v.put("void_reason", reason);
                         v.put("voided_at", now());
-                        v.put("voided_by", text(user));
+                        v.put("voided_by", user);
                         v.put("updated_at", now());
-                        v.put("updated_by", text(user));
+                        v.put("updated_by", user);
                         s.update("repayments", v, "payment_id=?", new String[]{paymentId});
                         recalcLoan(s, pr.loanId);
                         recalcClient(s, pr.clientId);
-                        audit(s, "Void payment", "repayment", paymentId, "Voided payment " + paymentId + ": " + text(reason), text(user));
+                        audit(s, "Void payment", "repayment", paymentId, "Voided payment " + paymentId + ": " + reason, user);
                         s.setTransactionSuccessful();
                         showPaymentHistoryForLoan(pr.loanId);
                     } catch (Exception ex) {
@@ -1826,7 +2018,7 @@ public class MainActivity extends Activity {
                         s.endTransaction();
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton("Back", null)
                 .show();
     }
 
@@ -1849,24 +2041,40 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Cancel Loan", (d, w) -> {
                     if (blank(reason)) { toast("Reason is required."); return; }
                     if (blank(user)) { toast("Cancelled By is required."); return; }
+                    confirmCancelLoan(loanId, lr, text(reason), text(user));
+                })
+                .setNegativeButton("Back", null)
+                .show();
+    }
+
+    private void confirmCancelLoan(String loanId, LoanRow lr, String reason, String user) {
+        new AlertDialog.Builder(this)
+                .setTitle("Confirm Loan Cancellation")
+                .setMessage("Borrower: " + lr.clientName +
+                        "\nLoan: " + loanId +
+                        "\nBalance: " + peso(lr.balance) +
+                        "\nReason: " + reason +
+                        "\nCancelled By: " + user +
+                        "\n\nThe loan will be marked Cancelled. Records will not be deleted.")
+                .setPositiveButton("Confirm Cancel", (d, w) -> {
                     SQLiteDatabase s = db.getWritableDatabase();
                     s.beginTransaction();
                     try {
                         ContentValues v = new ContentValues();
                         v.put("status", "Cancelled");
-                        v.put("cancel_reason", text(reason));
+                        v.put("cancel_reason", reason);
                         v.put("cancelled_at", now());
-                        v.put("cancelled_by", text(user));
+                        v.put("cancelled_by", user);
                         v.put("active", 0);
                         v.put("updated_at", now());
-                        v.put("updated_by", text(user));
+                        v.put("updated_by", user);
                         s.update("loans", v, "loan_id=?", new String[]{loanId});
                         ContentValues sv = new ContentValues();
                         sv.put("status", "Cancelled");
                         sv.put("updated_at", now());
                         s.update("schedule", sv, "loan_id=? AND status!='Paid'", new String[]{loanId});
                         recalcClient(s, lr.clientId);
-                        audit(s, "Cancel loan", "loan", loanId, "Cancelled loan: " + text(reason), text(user));
+                        audit(s, "Cancel loan", "loan", loanId, "Cancelled loan: " + reason, user);
                         s.setTransactionSuccessful();
                         showLoans();
                     } catch (Exception ex) {
@@ -2343,6 +2551,13 @@ public class MainActivity extends Activity {
         if (!isCollector()) return true;
         String collector = safe(currentUser.collectorName);
         if (collector.isEmpty()) return false;
+        int userId = currentUser == null ? 0 : currentUser.id;
+        if (userId > 0) {
+            int byId = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM clients WHERE client_id=? AND COALESCE(collector_user_id,0)=?", new String[]{clientId, String.valueOf(userId)});
+            if (byId > 0) return true;
+            byId = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE client_id=? AND COALESCE(collector_user_id,0)=?", new String[]{clientId, String.valueOf(userId)});
+            if (byId > 0) return true;
+        }
         int count = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM clients WHERE client_id=? AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{clientId, collector});
         if (count > 0) return true;
         return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE client_id=? AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{clientId, collector}) > 0;
@@ -2352,6 +2567,11 @@ public class MainActivity extends Activity {
         if (!isCollector()) return true;
         String collector = safe(currentUser.collectorName);
         if (collector.isEmpty()) return false;
+        int userId = currentUser == null ? 0 : currentUser.id;
+        if (userId > 0) {
+            int byId = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE loan_id=? AND COALESCE(collector_user_id,0)=?", new String[]{loanId, String.valueOf(userId)});
+            if (byId > 0) return true;
+        }
         return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE loan_id=? AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{loanId, collector}) > 0;
     }
 
@@ -2442,8 +2662,14 @@ public class MainActivity extends Activity {
     private String reportCollectorClauseWithAlias(ReportFilter f, ArrayList<String> args, String alias) {
         String collector = isCollector() ? currentUser.collectorName : f.collector;
         if (isAll(collector)) return "";
-        args.add(collector);
         String col = alias == null ? "collector" : alias + ".collector";
+        String idCol = alias == null ? "collector_user_id" : alias + ".collector_user_id";
+        if (isCollector() && currentUser != null && currentUser.id > 0) {
+            args.add(String.valueOf(currentUser.id));
+            args.add(collector);
+            return " AND (COALESCE(" + idCol + ",0)=? OR UPPER(COALESCE(" + col + ",''))=UPPER(?))";
+        }
+        args.add(collector);
         return " AND UPPER(COALESCE(" + col + ",''))=UPPER(?)";
     }
 
@@ -2456,6 +2682,7 @@ public class MainActivity extends Activity {
             args.add(f.method);
         }
         where += reportCollectorClauseWithAlias(f, args, "l");
+        where += reportBorrowerLoanClause(f, args, "l");
         return where;
     }
 
@@ -2464,7 +2691,22 @@ public class MainActivity extends Activity {
         args.add(f.startDate);
         args.add(f.endDate);
         where += reportCollectorClauseWithAlias(f, args, "l");
+        where += reportBorrowerLoanClause(f, args, "l");
         return where;
+    }
+
+    private String reportBorrowerLoanClause(ReportFilter f, ArrayList<String> args, String alias) {
+        String prefix = alias == null ? "" : alias + ".";
+        String out = "";
+        if (!isAll(f.borrowerId)) {
+            out += " AND " + prefix + "client_id=?";
+            args.add(f.borrowerId);
+        }
+        if (!isAll(f.loanId)) {
+            out += " AND " + prefix + "loan_id=?";
+            args.add(f.loanId);
+        }
+        return out;
     }
 
     private String[] reportPaymentRangeArgs(ReportFilter f) {
@@ -2472,6 +2714,8 @@ public class MainActivity extends Activity {
         args.add(f.startDate);
         args.add(f.endDate);
         if (!isAll(isCollector() ? currentUser.collectorName : f.collector)) args.add(isCollector() ? currentUser.collectorName : f.collector);
+        if (!isAll(f.borrowerId)) args.add(f.borrowerId);
+        if (!isAll(f.loanId)) args.add(f.loanId);
         return args.toArray(new String[0]);
     }
 
@@ -2622,6 +2866,45 @@ public class MainActivity extends Activity {
     private double number(EditText e) {
         try { return Double.parseDouble(text(e).replace(",", "")); } catch (Exception ex) { return 0; }
     }
+    private boolean validNonNegativeDecimal(EditText e) {
+        String raw = text(e).replace(",", "");
+        if (raw.isEmpty()) return false;
+        try {
+            return Double.parseDouble(raw) >= 0;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+    private boolean validPositiveDecimal(EditText e) {
+        return validNonNegativeDecimal(e) && number(e) > 0;
+    }
+    private boolean validPositiveInteger(EditText e) {
+        String raw = text(e);
+        if (raw.isEmpty()) return false;
+        try {
+            int n = Integer.parseInt(raw);
+            return n > 0;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+    private boolean validDateOrBlank(EditText e) {
+        String raw = text(e);
+        if (raw.isEmpty()) return true;
+        try {
+            ISO.setLenient(false);
+            ISO.parse(raw);
+            return raw.matches("\\d{4}-\\d{2}-\\d{2}");
+        } catch (Exception ex) {
+            return false;
+        } finally {
+            ISO.setLenient(true);
+        }
+    }
+    private boolean isInactiveText(String value) {
+        String v = safe(value).trim().toLowerCase(Locale.US);
+        return v.equals("0") || v.equals("inactive") || v.equals("disabled") || v.equals("no");
+    }
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
 
@@ -2683,13 +2966,15 @@ public class MainActivity extends Activity {
     }
 
     private static class ReportFilter {
-        final String startDate, endDate, collector, method, releasedBy;
-        ReportFilter(String startDate, String endDate, String collector, String method, String releasedBy) {
+        final String startDate, endDate, collector, method, releasedBy, borrowerId, loanId;
+        ReportFilter(String startDate, String endDate, String collector, String method, String releasedBy, String borrowerId, String loanId) {
             this.startDate = startDate == null || startDate.trim().isEmpty() ? "" : startDate.trim();
             this.endDate = endDate == null || endDate.trim().isEmpty() ? this.startDate : endDate.trim();
             this.collector = collector == null || collector.trim().isEmpty() ? "All" : collector.trim();
             this.method = method == null || method.trim().isEmpty() ? "All" : method.trim();
             this.releasedBy = releasedBy == null || releasedBy.trim().isEmpty() ? "All" : releasedBy.trim();
+            this.borrowerId = borrowerId == null || borrowerId.trim().isEmpty() ? "All" : borrowerId.trim();
+            this.loanId = loanId == null || loanId.trim().isEmpty() ? "All" : loanId.trim();
         }
     }
 
