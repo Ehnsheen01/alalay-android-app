@@ -48,8 +48,10 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKeyFactory;
@@ -73,22 +75,25 @@ public class MainActivity extends Activity {
     private static final String[] ACTIVE_OPTIONS = new String[]{"Active", "Inactive"};
     private static final String[] LEDGER_STATUS_OPTIONS = new String[]{"Available", "Released", "Held", "Reversed"};
     private static final int REQ_RESTORE_JSON = 501;
+    private static final int REQ_IMPORT_CSV = 502;
     private static final int APP_DB_VERSION = 5;
     private static final String[] BACKUP_TABLES = new String[]{"users", "clients", "loans", "schedule", "repayments", "audit_logs", "commission_settings", "collector_commission_rates", "commission_ledger", "commission_releases"};
+    private static final String[] GOOGLE_IMPORT_TYPES = new String[]{"Clients", "Loans", "Payment Schedule", "Repayments", "Collector Commission Rates", "Dashboard Reference"};
 
     private Db db;
     private LinearLayout content;
     private UserRow currentUser;
     private final NumberFormat money = NumberFormat.getCurrencyInstance(PH);
+    private String pendingImportType = "";
+    private volatile boolean databaseReady = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         db = new Db(this);
-        db.getWritableDatabase();
-        ensureDefaultCollectorRates();
         money.setMinimumFractionDigits(2);
         showLoginScreen();
+        prepareDatabaseAsync();
     }
 
     @Override
@@ -97,6 +102,21 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_RESTORE_JSON && resultCode == RESULT_OK && data != null && data.getData() != null) {
             handleRestoreUri(data.getData());
         }
+        if (requestCode == REQ_IMPORT_CSV && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            handleGoogleCsvImportUri(data.getData());
+        }
+    }
+
+    private void prepareDatabaseAsync() {
+        new Thread(() -> {
+            try {
+                db.getWritableDatabase();
+                ensureDefaultCollectorRates();
+                databaseReady = true;
+            } catch (Exception ex) {
+                runOnUiThread(() -> toast("Database preparation failed: " + ex.getMessage()));
+            }
+        }).start();
     }
 
     private void showLoginScreen() {
@@ -134,6 +154,10 @@ public class MainActivity extends Activity {
         login.setBackgroundColor(BLUE);
         root.addView(login, new LinearLayout.LayoutParams(-1, dp(48)));
         login.setOnClickListener(v -> {
+            if (!databaseReady) {
+                toast("Database is still preparing. Please wait a moment.");
+                return;
+            }
             UserRow user = authenticate(text(username), text(password));
             if (user == null) {
                 toast("Invalid username/password or inactive account.");
@@ -261,9 +285,14 @@ public class MainActivity extends Activity {
         addAction("Commission Release", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
         addAction("Commission Release History", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
         addAction("Recalculate Commission", new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }});
+        addAction("Import Validation", new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }});
+        addAction("Recalculate Imported Balances", new View.OnClickListener() { public void onClick(View v) { showRecalculateImportedBalancesDialog(); }});
+        addAction("Collector Cleanup", new View.OnClickListener() { public void onClick(View v) { showCollectorCleanupTool(); }});
         addAction("Backup Data", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
         addAction("Restore Data", new View.OnClickListener() { public void onClick(View v) { showRestoreDataDialog(); }});
         addAction("Export CSV", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
+        addAction("Import Google Sheet CSV", new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }});
+        addAction("Import Summary History", new View.OnClickListener() { public void onClick(View v) { showImportSummaryHistory(); }});
         addAction("Change Password", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
         addSection("Testing Tools");
         addCard("Audit Logs Viewer", "Review local actions recorded by the app: client changes, loan releases, payments, voids, cancellations, and passbook prints.", (String) null, (View.OnClickListener) null);
@@ -565,6 +594,767 @@ public class MainActivity extends Activity {
             toast("Restore failed: " + ex.getMessage());
             audit(db.getWritableDatabase(), encrypted ? "Encrypted backup restore failed" : "Restore failed", "backup", encrypted ? "ALALAY" : "JSON", safe(ex.getMessage()), actor);
         }
+    }
+
+    private void showGoogleCsvImportMenu() {
+        if (!requireAdmin()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Import Google Sheet CSV")
+                .setItems(GOOGLE_IMPORT_TYPES, (d, which) -> pickGoogleCsv(GOOGLE_IMPORT_TYPES[which]))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void pickGoogleCsv(String type) {
+        pendingImportType = type;
+        new AlertDialog.Builder(this)
+                .setTitle("Before Importing Real Data")
+                .setMessage("Please create an encrypted backup before importing real data.")
+                .setPositiveButton("Create Backup First", (d, w) -> showEncryptedBackupDialog())
+                .setNegativeButton("Continue Import", (d, w) -> openGoogleCsvPicker())
+                .show();
+    }
+
+    private void openGoogleCsvPicker() {
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        pick.addCategory(Intent.CATEGORY_OPENABLE);
+        pick.setType("text/*");
+        startActivityForResult(pick, REQ_IMPORT_CSV);
+    }
+
+    private void showImportSummaryHistory() {
+        if (!requireAdmin()) return;
+        clear("Import Summary History");
+        addAction("Back to Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT created_at,actor,action,entity_id,details FROM audit_logs WHERE action LIKE '%Google Sheet%' OR action LIKE '%import%' ORDER BY created_at DESC,id DESC LIMIT 50", null);
+        try {
+            if (!c.moveToFirst()) { addEmpty("No import history found in audit logs."); return; }
+            do {
+                addCard(safe(c.getString(2)) + " - " + safe(c.getString(3)),
+                        "Date/Time: " + safe(c.getString(0)) +
+                                "\nImported by: " + safe(c.getString(1)) +
+                                "\nSummary: " + safe(c.getString(4)),
+                        (String) null, (View.OnClickListener) null);
+            } while (c.moveToNext());
+        } finally { c.close(); }
+    }
+
+    private void showImportValidationDashboard() {
+        if (!requireAdmin()) return;
+        clear("Import Validation");
+        addAction("Back to Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
+        addAction("Collector Cleanup", new View.OnClickListener() { public void onClick(View v) { showCollectorCleanupTool(); }});
+        addAction("Recalculate Imported Balances", new View.OnClickListener() { public void onClick(View v) { showRecalculateImportedBalancesDialog(); }});
+        SQLiteDatabase r = db.getReadableDatabase();
+        addMetric("Imported Clients", String.valueOf(scalarInt(r, "SELECT COUNT(*) FROM clients", null)));
+        addMetric("Imported Loans", String.valueOf(scalarInt(r, "SELECT COUNT(*) FROM loans", null)));
+        addMetric("Schedule Rows", String.valueOf(scalarInt(r, "SELECT COUNT(*) FROM schedule", null)));
+        addMetric("Repayments", String.valueOf(scalarInt(r, "SELECT COUNT(*) FROM repayments", null)));
+        addMetric("Active Loans", String.valueOf(scalarInt(r, "SELECT COUNT(*) FROM loans WHERE status='Active'", null)));
+        addMetric("Paid Loans", String.valueOf(scalarInt(r, "SELECT COUNT(*) FROM loans WHERE status='Paid'", null)));
+        addMetric("Cancelled Loans", String.valueOf(scalarInt(r, "SELECT COUNT(*) FROM loans WHERE status='Cancelled'", null)));
+        addMetric("Total Outstanding", peso(scalarDouble(r, "SELECT COALESCE(SUM(balance),0) FROM loans WHERE status='Active'", null)));
+        addMetric("Principal Released", peso(scalarDouble(r, "SELECT COALESCE(SUM(principal),0) FROM loans WHERE status!='Cancelled'", null)));
+        addMetric("Total Collected", peso(scalarDouble(r, "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE voided=0", null)));
+        addMetric("Total Overdue", peso(scalarDouble(r, "SELECT COALESCE(SUM(CASE WHEN s.scheduled_amount-s.paid_to_date>0 THEN s.scheduled_amount-s.paid_to_date ELSE 0 END),0) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.status!='Paid' AND s.due_date<?", new String[]{ISO.format(new Date())})));
+        addSection("Mismatch Counts");
+        addValidationCount("Records with missing client links", "SELECT COUNT(*) FROM loans l LEFT JOIN clients c ON c.client_id=l.client_id WHERE c.client_id IS NULL", null, "Missing client");
+        addValidationCount("Loans without schedule", "SELECT COUNT(*) FROM loans l LEFT JOIN schedule s ON s.loan_id=l.loan_id WHERE s.loan_id IS NULL AND l.status!='Cancelled'", null, "Loans without schedule");
+        addValidationCount("Schedule rows without loan", "SELECT COUNT(*) FROM schedule s LEFT JOIN loans l ON l.loan_id=s.loan_id WHERE l.loan_id IS NULL", null, "Schedule rows without loan");
+        addValidationCount("Payments without loan", "SELECT COUNT(*) FROM repayments r LEFT JOIN loans l ON l.loan_id=r.loan_id WHERE l.loan_id IS NULL", null, "Payments without loan");
+        addValidationCount("Duplicate client IDs", "SELECT COUNT(*) FROM (SELECT client_id FROM clients GROUP BY client_id HAVING COUNT(*)>1)", null, "Duplicate client IDs");
+        addValidationCount("Duplicate loan IDs", "SELECT COUNT(*) FROM (SELECT loan_id FROM loans GROUP BY loan_id HAVING COUNT(*)>1)", null, "Duplicate loan IDs");
+        addValidationCount("Duplicate payment IDs", "SELECT COUNT(*) FROM (SELECT payment_id FROM repayments GROUP BY payment_id HAVING COUNT(*)>1)", null, "Duplicate payment IDs");
+        addValidationCount("Collector names not canonical", "SELECT COUNT(*) FROM (" + unknownCollectorUnionSql() + ")", null, "Unknown collector");
+        addValidationCount("Invalid amounts", "SELECT COUNT(*) FROM (SELECT loan_id FROM loans WHERE principal<0 OR total_due<0 OR balance<0 UNION ALL SELECT payment_id FROM repayments WHERE amount<0 UNION ALL SELECT loan_id FROM schedule WHERE scheduled_amount<0 OR paid_to_date<0)", null, "Invalid amount");
+        addValidationCount("Blank due dates", "SELECT COUNT(*) FROM schedule WHERE COALESCE(due_date,'')=''", null, "Blank due date");
+        addValidationCount("Invalid statuses", "SELECT COUNT(*) FROM (" + invalidStatusUnionSql() + ")", null, "Invalid status");
+        audit(db.getWritableDatabase(), "Import validation viewed", "validation", "import", "Viewed import validation dashboard", currentUsername());
+    }
+
+    private void addValidationCount(String label, String sql, String[] args, final String detailType) {
+        int count = scalarInt(db.getReadableDatabase(), sql, args);
+        addCard(label, String.valueOf(count), count == 0 ? null : "View Details",
+                count == 0 ? null : new View.OnClickListener() { public void onClick(View v) { showMismatchDetails(detailType); }});
+    }
+
+    private void showMismatchDetails(String type) {
+        if (!requireAdmin()) return;
+        clear(type + " Details");
+        addAction("Back to Import Validation", new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }});
+        if ("Missing client".equals(type)) showSimpleRows("SELECT l.loan_id,l.client_id,l.client_name,l.status,l.balance FROM loans l LEFT JOIN clients c ON c.client_id=l.client_id WHERE c.client_id IS NULL ORDER BY l.loan_id", null, "Loan", new int[]{4});
+        else if ("Loans without schedule".equals(type)) showSimpleRows("SELECT l.loan_id,l.client_name,l.status,l.balance,l.collector FROM loans l LEFT JOIN schedule s ON s.loan_id=l.loan_id WHERE s.loan_id IS NULL AND l.status!='Cancelled' ORDER BY l.loan_id", null, "Loan", new int[]{3});
+        else if ("Schedule rows without loan".equals(type)) showSimpleRows("SELECT s.loan_id,s.installment_no,s.due_date,s.scheduled_amount,s.status FROM schedule s LEFT JOIN loans l ON l.loan_id=s.loan_id WHERE l.loan_id IS NULL ORDER BY s.loan_id,s.installment_no", null, "Schedule", new int[]{3});
+        else if ("Payments without loan".equals(type)) showSimpleRows("SELECT r.payment_id,r.loan_id,r.client_name,r.amount,r.payment_date,r.voided FROM repayments r LEFT JOIN loans l ON l.loan_id=r.loan_id WHERE l.loan_id IS NULL ORDER BY r.payment_id", null, "Payment", new int[]{3});
+        else if ("Duplicate client IDs".equals(type)) showSimpleRows("SELECT client_id,COUNT(*) FROM clients GROUP BY client_id HAVING COUNT(*)>1", null, "Client", null);
+        else if ("Duplicate loan IDs".equals(type)) showSimpleRows("SELECT loan_id,COUNT(*) FROM loans GROUP BY loan_id HAVING COUNT(*)>1", null, "Loan", null);
+        else if ("Duplicate payment IDs".equals(type)) showSimpleRows("SELECT payment_id,COUNT(*) FROM repayments GROUP BY payment_id HAVING COUNT(*)>1", null, "Payment", null);
+        else if ("Unknown collector".equals(type)) showSimpleRows(unknownCollectorUnionSql(), null, "Collector", null);
+        else if ("Invalid amount".equals(type)) showSimpleRows("SELECT 'Loan' AS source,loan_id,client_name,principal,total_due,balance FROM loans WHERE principal<0 OR total_due<0 OR balance<0 UNION ALL SELECT 'Payment',payment_id,client_name,amount,0,0 FROM repayments WHERE amount<0 UNION ALL SELECT 'Schedule',loan_id || '-' || installment_no,due_date,scheduled_amount,paid_to_date,0 FROM schedule WHERE scheduled_amount<0 OR paid_to_date<0", null, "Amount", new int[]{3,4,5});
+        else if ("Blank due date".equals(type)) showSimpleRows("SELECT loan_id,installment_no,scheduled_amount,status FROM schedule WHERE COALESCE(due_date,'')='' ORDER BY loan_id,installment_no", null, "Schedule", new int[]{2});
+        else if ("Invalid status".equals(type)) showSimpleRows(invalidStatusUnionSql(), null, "Status", null);
+    }
+
+    private void showSimpleRows(String sql, String[] args, String titlePrefix, int[] moneyColumns) {
+        Cursor c = db.getReadableDatabase().rawQuery(sql, args);
+        try {
+            if (!c.moveToFirst()) { addEmpty("No affected records found."); return; }
+            int shown = 0;
+            do {
+                String title = titlePrefix + " " + safe(c.getString(0));
+                StringBuilder body = new StringBuilder();
+                for (int i = 0; i < c.getColumnCount(); i++) {
+                    boolean asMoney = false;
+                    if (moneyColumns != null) for (int col : moneyColumns) if (col == i) asMoney = true;
+                    body.append(c.getColumnName(i)).append(": ").append(asMoney ? peso(c.getDouble(i)) : safe(c.getString(i))).append("\n");
+                }
+                addCard(title, body.toString().trim(), (String) null, (View.OnClickListener) null);
+                shown++;
+            } while (c.moveToNext() && shown < 200);
+            if (shown >= 200) addEmpty("Showing first 200 affected records.");
+        } finally { c.close(); }
+    }
+
+    private void showCollectorCleanupTool() {
+        if (!requireAdmin()) return;
+        clear("Collector Cleanup");
+        addAction("Back to Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
+        addAction("Import Validation", new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }});
+        Cursor c = db.getReadableDatabase().rawQuery(unknownCollectorUnionSql(), null);
+        try {
+            if (!c.moveToFirst()) {
+                addEmpty("No non-canonical collector names found.");
+                return;
+            }
+            do {
+                final String source = safe(c.getString(0));
+                final String raw = safe(c.getString(1));
+                final int count = c.getInt(2);
+                ArrayList<String> labels = new ArrayList<>();
+                ArrayList<View.OnClickListener> listeners = new ArrayList<>();
+                for (final String target : COLLECTOR_NAMES) {
+                    labels.add("Map to " + target);
+                    listeners.add(new View.OnClickListener() { public void onClick(View v) { confirmCollectorCleanup(source, raw, target); }});
+                }
+                addCard(raw, "Source: " + source + "\nRecords: " + count + "\nCanonical suggestion: " + canonicalCollector(raw),
+                        labels.toArray(new String[0]), listeners.toArray(new View.OnClickListener[0]));
+            } while (c.moveToNext());
+        } finally { c.close(); }
+    }
+
+    private void confirmCollectorCleanup(final String source, final String raw, final String target) {
+        new AlertDialog.Builder(this)
+                .setTitle("Confirm Collector Cleanup")
+                .setMessage("Replace collector name:\n" + raw + "\n\nWith:\n" + target + "\n\nSource: " + source)
+                .setPositiveButton("Apply Cleanup", (d, w) -> applyCollectorCleanup(source, raw, target))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void applyCollectorCleanup(String source, String raw, String target) {
+        if (!requireAdmin()) return;
+        SQLiteDatabase s = db.getWritableDatabase();
+        int changed = 0;
+        s.beginTransaction();
+        try {
+            ContentValues v = new ContentValues();
+            v.put("collector", target);
+            if ("clients".equals(source)) {
+                v.put("collector_user_id", findCollectorUserId(target));
+                changed += s.update("clients", v, "collector=?", new String[]{raw});
+            } else if ("loans".equals(source)) {
+                v.put("collector_user_id", findCollectorUserId(target));
+                changed += s.update("loans", v, "collector=?", new String[]{raw});
+            } else if ("commission_ledger".equals(source)) {
+                changed += s.update("commission_ledger", v, "collector=?", new String[]{raw});
+            } else if ("commission_releases".equals(source)) {
+                changed += s.update("commission_releases", v, "collector=?", new String[]{raw});
+            } else if ("collector_commission_rates".equals(source)) {
+                ContentValues rv = new ContentValues();
+                rv.put("collector_name", target);
+                rv.put("collector_user_id", findCollectorUserId(target));
+                changed += s.update("collector_commission_rates", rv, "collector_name=?", new String[]{raw});
+            }
+            audit(s, "Collector cleanup", source, raw, "Mapped " + raw + " to " + target + " in " + changed + " row(s)", currentUsername());
+            s.setTransactionSuccessful();
+        } finally {
+            s.endTransaction();
+        }
+        toast("Collector cleanup updated " + changed + " row(s).");
+        showCollectorCleanupTool();
+    }
+
+    private void showRecalculateImportedBalancesDialog() {
+        if (!requireAdmin()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Recalculate Imported Balances")
+                .setMessage("This recalculates imported loan balances, client outstanding balances, schedule statuses, and fully-paid commission from current valid non-voided repayments. Imported IDs are preserved. Continue?")
+                .setPositiveButton("Recalculate", (d, w) -> showRecalculateImportedBalancesResult())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showRecalculateImportedBalancesResult() {
+        String result = recalculateImportedBalances();
+        clear("Recalculate Imported Balances");
+        addAction("Back to Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
+        addAction("Run System Check", new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }});
+        addCard("Completed", result, (String) null, (View.OnClickListener) null);
+    }
+
+    private String recalculateImportedBalances() {
+        SQLiteDatabase s = db.getWritableDatabase();
+        int loans = 0;
+        int clients = 0;
+        s.beginTransaction();
+        try {
+            Cursor loanRows = s.rawQuery("SELECT loan_id,client_id FROM loans WHERE status!='Cancelled'", null);
+            try {
+                while (loanRows.moveToNext()) {
+                    recalcLoan(s, loanRows.getString(0));
+                    loans++;
+                }
+            } finally { loanRows.close(); }
+            Cursor clientRows = s.rawQuery("SELECT client_id FROM clients", null);
+            try {
+                while (clientRows.moveToNext()) {
+                    recalcClient(s, clientRows.getString(0));
+                    clients++;
+                }
+            } finally { clientRows.close(); }
+            audit(s, "Recalculate imported balances", "import_cleanup", "ALL", "Recalculated " + loans + " loans and " + clients + " clients", currentUsername());
+            s.setTransactionSuccessful();
+        } catch (Exception ex) {
+            return "Failed: " + ex.getMessage();
+        } finally {
+            s.endTransaction();
+        }
+        String commission = recalculateCommissions();
+        return "Loans recalculated: " + loans +
+                "\nClients recalculated: " + clients +
+                "\nSchedule rows were recalculated through loan repayment allocation." +
+                "\nCommission recalculation:\n" + commission +
+                "\nImported client, loan, and payment IDs were preserved.";
+    }
+
+    private String unknownCollectorUnionSql() {
+        String allowed = canonicalCollectorSqlList();
+        return "SELECT 'clients' AS source,collector AS collector,COUNT(*) AS rows_count FROM clients WHERE COALESCE(collector,'')!='' AND UPPER(collector) NOT IN (" + allowed + ") GROUP BY collector " +
+                "UNION ALL SELECT 'loans',collector,COUNT(*) FROM loans WHERE COALESCE(collector,'')!='' AND UPPER(collector) NOT IN (" + allowed + ") GROUP BY collector " +
+                "UNION ALL SELECT 'commission_ledger',collector,COUNT(*) FROM commission_ledger WHERE COALESCE(collector,'')!='' AND UPPER(collector) NOT IN (" + allowed + ") GROUP BY collector " +
+                "UNION ALL SELECT 'commission_releases',collector,COUNT(*) FROM commission_releases WHERE COALESCE(collector,'')!='' AND UPPER(collector) NOT IN (" + allowed + ") GROUP BY collector " +
+                "UNION ALL SELECT 'collector_commission_rates',collector_name,COUNT(*) FROM collector_commission_rates WHERE COALESCE(collector_name,'')!='' AND UPPER(collector_name) NOT IN (" + allowed + ") GROUP BY collector_name";
+    }
+
+    private String invalidStatusUnionSql() {
+        return "SELECT 'clients' AS source,client_id AS id,status FROM clients WHERE COALESCE(status,'') NOT IN ('Active','Inactive') " +
+                "UNION ALL SELECT 'loans',loan_id,status FROM loans WHERE COALESCE(status,'') NOT IN ('Active','Paid','Cancelled') " +
+                "UNION ALL SELECT 'schedule',loan_id || '-' || installment_no,status FROM schedule WHERE COALESCE(status,'') NOT IN ('Open','Partial','Paid','Cancelled') " +
+                "UNION ALL SELECT 'commission_ledger',CAST(id AS TEXT),status FROM commission_ledger WHERE COALESCE(status,'') NOT IN ('Available','Released','Held','Reversed') " +
+                "UNION ALL SELECT 'commission_releases',release_number,status FROM commission_releases WHERE COALESCE(status,'') NOT IN ('Released','Voided','Cancelled')";
+    }
+
+    private String canonicalCollectorSqlList() {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < COLLECTOR_NAMES.length; i++) {
+            if (i > 0) out.append(",");
+            out.append("'").append(COLLECTOR_NAMES[i].replace("'", "''")).append("'");
+        }
+        return out.toString();
+    }
+
+    private void handleGoogleCsvImportUri(Uri uri) {
+        if (!requireAdmin()) return;
+        try {
+            String type = pendingImportType;
+            if (type.isEmpty()) { toast("No import type selected."); return; }
+            CsvData csv = parseCsv(readUriText(uri));
+            validateGoogleCsvHeaders(type, csv);
+            showGoogleCsvPreview(type, csv);
+        } catch (Exception ex) {
+            toast("CSV validation failed: " + ex.getMessage());
+            audit(db.getWritableDatabase(), "Google Sheet CSV import failed", "csv_import", pendingImportType, safe(ex.getMessage()), currentUsername());
+        }
+    }
+
+    private void showGoogleCsvPreview(final String type, final CsvData csv) {
+        LinearLayout box = form();
+        TextView summary = new TextView(this);
+        summary.setText("Import type: " + type +
+                "\nRows found: " + csv.rows.size() +
+                "\nRequired columns: OK\n\nPreview:\n" + csvPreview(csv, 5));
+        summary.setTextColor(INK);
+        summary.setTextSize(13);
+        box.addView(summary);
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle("Preview Google Sheet CSV")
+                .setView(sc)
+                .setPositiveButton("Skip Duplicates", (d, w) -> runGoogleCsvImport(type, csv, false))
+                .setNegativeButton("Cancel", null);
+        b.setNeutralButton("Update Existing", (d, w) -> runGoogleCsvImport(type, csv, true));
+        b.show();
+    }
+
+    private String csvPreview(CsvData csv, int limit) {
+        StringBuilder out = new StringBuilder();
+        int max = Math.min(limit, csv.rows.size());
+        for (int i = 0; i < max; i++) {
+            Map<String, String> row = csv.rows.get(i);
+            out.append(i + 1).append(". ");
+            int shown = 0;
+            for (String h : csv.headers) {
+                if (shown++ > 0) out.append(" | ");
+                out.append(h).append(": ").append(safe(row.get(h)));
+                if (shown >= 4) break;
+            }
+            out.append("\n");
+        }
+        if (csv.rows.size() > max) out.append("... ").append(csv.rows.size() - max).append(" more row(s)");
+        if (csv.rows.isEmpty()) out.append("No data rows found.");
+        return out.toString();
+    }
+
+    private void runGoogleCsvImport(String type, CsvData csv, boolean updateExisting) {
+        ImportSummary summary;
+        if ("Dashboard Reference".equals(type)) {
+            summary = compareDashboardReference(csv);
+            audit(db.getWritableDatabase(), "Google Sheet dashboard reference compared", "csv_import", type, summary.shortLine(), currentUsername());
+            showGoogleImportSummary(type, summary);
+            return;
+        }
+        SQLiteDatabase s = db.getWritableDatabase();
+        s.beginTransaction();
+        try {
+            if ("Clients".equals(type)) summary = importClientsCsv(s, csv, updateExisting);
+            else if ("Loans".equals(type)) summary = importLoansCsv(s, csv, updateExisting);
+            else if ("Payment Schedule".equals(type)) summary = importScheduleCsv(s, csv, updateExisting);
+            else if ("Repayments".equals(type)) summary = importRepaymentsCsv(s, csv, updateExisting);
+            else if ("Collector Commission Rates".equals(type)) summary = importCollectorRatesCsv(s, csv, updateExisting);
+            else throw new Exception("Unsupported import type.");
+            audit(s, "Google Sheet CSV import", "csv_import", type, summary.shortLine() + " | mode=" + (updateExisting ? "update existing" : "skip duplicates"), currentUsername());
+            s.setTransactionSuccessful();
+        } catch (Exception ex) {
+            summary = new ImportSummary();
+            summary.errors.add("Import failed: " + ex.getMessage());
+            audit(db.getWritableDatabase(), "Google Sheet CSV import failed", "csv_import", type, safe(ex.getMessage()), currentUsername());
+        } finally {
+            s.endTransaction();
+        }
+        if ("Repayments".equals(type)) recalcAllClientsAfterImport();
+        ensureDefaultCollectorRates();
+        showGoogleImportSummary(type, summary);
+    }
+
+    private void showGoogleImportSummary(String type, ImportSummary summary) {
+        clear("Google CSV Import Summary");
+        addAction("Back to Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
+        addAction("Run System Check", new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }});
+        addCard(type, summary.fullText(), (String) null, (View.OnClickListener) null);
+    }
+
+    private ImportSummary importClientsCsv(SQLiteDatabase s, CsvData csv, boolean updateExisting) {
+        ImportSummary out = new ImportSummary();
+        for (Map<String, String> row : csv.rows) {
+            String id = val(row, "Client ID");
+            if (id.isEmpty()) { out.errors.add("Client row missing Client ID."); continue; }
+            boolean exists = scalarInt(s, "SELECT COUNT(*) FROM clients WHERE client_id=?", new String[]{id}) > 0;
+            if (exists && !updateExisting) { out.skipped++; continue; }
+            ContentValues v = new ContentValues();
+            v.put("client_id", id);
+            v.put("name", val(row, "Client Name"));
+            v.put("phone", val(row, "Phone"));
+            v.put("address", val(row, "Barangay/Address"));
+            v.put("enrolled_date", val(row, "Date Enrolled / Registered"));
+            v.put("status", normalizeActiveStatus(val(row, "Client Status")));
+            v.put("active_loans", parseIntSafe(val(row, "Active Loans")));
+            v.put("total_outstanding", parseAmount(val(row, "Total Outstanding")));
+            v.put("employment", val(row, "Employment"));
+            String collector = canonicalCollector(val(row, "Collector"));
+            v.put("collector", collector);
+            v.put("collector_user_id", findCollectorUserId(collector));
+            v.put("valid_id_no", val(row, "Valid ID No."));
+            v.put("valid_id_file", val(row, "Valid ID File"));
+            v.put("updated_at", now());
+            v.put("updated_by", currentUsername());
+            v.put("active", "Inactive".equals(normalizeActiveStatus(val(row, "Client Status"))) ? 0 : 1);
+            if (exists) {
+                s.update("clients", v, "client_id=?", new String[]{id});
+                out.updated++;
+            } else {
+                v.put("created_at", now());
+                v.put("created_by", currentUsername());
+                s.insertOrThrow("clients", null, v);
+                out.inserted++;
+            }
+        }
+        return out;
+    }
+
+    private ImportSummary importLoansCsv(SQLiteDatabase s, CsvData csv, boolean updateExisting) {
+        ImportSummary out = new ImportSummary();
+        for (Map<String, String> row : csv.rows) {
+            String loanId = val(row, "Loan ID");
+            if (loanId.isEmpty()) { out.errors.add("Loan row missing Loan ID."); continue; }
+            boolean exists = scalarInt(s, "SELECT COUNT(*) FROM loans WHERE loan_id=?", new String[]{loanId}) > 0;
+            if (exists && !updateExisting) { out.skipped++; continue; }
+            String clientId = val(row, "Client ID");
+            if (clientId.isEmpty()) { out.errors.add("Loan " + loanId + " missing Client ID."); continue; }
+            if (scalarInt(s, "SELECT COUNT(*) FROM clients WHERE client_id=?", new String[]{clientId}) == 0) {
+                out.errors.add("Loan " + loanId + " references missing client " + clientId + ". Import Clients first.");
+                continue;
+            }
+            ContentValues v = new ContentValues();
+            v.put("loan_id", loanId);
+            v.put("client_id", clientId);
+            v.put("client_name", val(row, "Client Name"));
+            v.put("release_date", val(row, "Release Date"));
+            v.put("principal", parseAmount(val(row, "Principal")));
+            v.put("interest_rate", parsePercent(val(row, "Interest Rate")));
+            v.put("term_weeks", parseIntSafe(val(row, "Term Weeks")));
+            v.put("weekly_due", parseAmount(val(row, "Weekly Due")));
+            v.put("total_due", parseAmount(val(row, "Total Due")));
+            v.put("balance", parseAmount(val(row, "Balance")));
+            v.put("status", normalizeLoanStatus(val(row, "Status")));
+            v.put("next_due_date", val(row, "Next Due Date"));
+            v.put("days_overdue", parseIntSafe(val(row, "Days Overdue")));
+            v.put("terms", val(row, "Terms"));
+            v.put("employment", val(row, "Employment"));
+            v.put("released_thru", normalizeMethod(val(row, "Released Thru")));
+            v.put("reference_number", val(row, "Reference Number"));
+            String collector = canonicalCollector(val(row, "Collector"));
+            v.put("collector", collector);
+            v.put("collector_user_id", findCollectorUserId(collector));
+            v.put("maturity_date", val(row, "Maturity Date"));
+            v.put("loan_type", val(row, "Loan Type"));
+            double csvRate = parsePercent(val(row, "Collector Commission Rate"));
+            v.put("commission_rate", csvRate > 0 ? csvRate : getCollectorCommissionSetting(collector).rate);
+            v.put("updated_at", now());
+            v.put("updated_by", currentUsername());
+            v.put("active", "Cancelled".equals(normalizeLoanStatus(val(row, "Status"))) ? 0 : 1);
+            if (exists) {
+                s.update("loans", v, "loan_id=?", new String[]{loanId});
+                out.updated++;
+            } else {
+                v.put("created_at", now());
+                v.put("created_by", currentUsername());
+                s.insertOrThrow("loans", null, v);
+                out.inserted++;
+            }
+        }
+        return out;
+    }
+
+    private ImportSummary importScheduleCsv(SQLiteDatabase s, CsvData csv, boolean updateExisting) {
+        ImportSummary out = new ImportSummary();
+        for (Map<String, String> row : csv.rows) {
+            String loanId = val(row, "Loan ID");
+            int installment = parseIntSafe(val(row, "Installment #"));
+            if (loanId.isEmpty() || installment <= 0) { out.errors.add("Schedule row missing Loan ID or Installment #."); continue; }
+            boolean exists = scalarInt(s, "SELECT COUNT(*) FROM schedule WHERE loan_id=? AND installment_no=?", new String[]{loanId, String.valueOf(installment)}) > 0;
+            if (exists && !updateExisting) { out.skipped++; continue; }
+            if (scalarInt(s, "SELECT COUNT(*) FROM loans WHERE loan_id=?", new String[]{loanId}) == 0) {
+                out.errors.add("Schedule references missing loan " + loanId + ". Import Loans first.");
+                continue;
+            }
+            ContentValues v = new ContentValues();
+            v.put("loan_id", loanId);
+            v.put("installment_no", installment);
+            v.put("due_date", val(row, "Due Date"));
+            v.put("scheduled_amount", parseAmount(val(row, "Scheduled Amount")));
+            v.put("paid_to_date", parseAmount(val(row, "Paid To Date")));
+            v.put("status", normalizeScheduleStatus(val(row, "Status")));
+            v.put("days_late", parseIntSafe(val(row, "Days Late")));
+            v.put("updated_at", now());
+            if (exists) {
+                s.update("schedule", v, "loan_id=? AND installment_no=?", new String[]{loanId, String.valueOf(installment)});
+                out.updated++;
+            } else {
+                v.put("created_at", now());
+                s.insertOrThrow("schedule", null, v);
+                out.inserted++;
+            }
+        }
+        return out;
+    }
+
+    private ImportSummary importRepaymentsCsv(SQLiteDatabase s, CsvData csv, boolean updateExisting) {
+        ImportSummary out = new ImportSummary();
+        ArrayList<String> touchedLoans = new ArrayList<>();
+        for (Map<String, String> row : csv.rows) {
+            String paymentId = val(row, "Payment ID");
+            if (paymentId.isEmpty()) { out.errors.add("Repayment row missing Payment ID."); continue; }
+            boolean exists = scalarInt(s, "SELECT COUNT(*) FROM repayments WHERE payment_id=?", new String[]{paymentId}) > 0;
+            if (exists && !updateExisting) { out.skipped++; continue; }
+            String loanId = val(row, "Loan ID");
+            LoanRow loan = findLoan(loanId);
+            if (loan == null) { out.errors.add("Payment " + paymentId + " references missing loan " + loanId + "."); continue; }
+            ContentValues v = new ContentValues();
+            v.put("payment_id", paymentId);
+            v.put("receipt_number", paymentId);
+            v.put("loan_id", loanId);
+            v.put("client_id", loan.clientId);
+            v.put("client_name", val(row, "Client Name").isEmpty() ? loan.clientName : val(row, "Client Name"));
+            v.put("payment_date", val(row, "Payment Date"));
+            v.put("amount", parseAmount(val(row, "Amount")));
+            v.put("method", normalizeMethod(val(row, "Method")));
+            v.put("remarks", val(row, "Remarks"));
+            v.put("encoded_at", val(row, "Encoded At"));
+            v.put("posted_by", currentUsername());
+            boolean voided = isVoidedText(val(row, "Void Status")) || !val(row, "Voided At").isEmpty() || !val(row, "Void Reason").isEmpty();
+            v.put("voided", voided ? 1 : 0);
+            v.put("voided_at", val(row, "Voided At"));
+            v.put("voided_by", val(row, "Voided By"));
+            v.put("void_reason", val(row, "Void Reason"));
+            v.put("updated_at", now());
+            v.put("updated_by", currentUsername());
+            if (exists) {
+                s.update("repayments", v, "payment_id=?", new String[]{paymentId});
+                out.updated++;
+            } else {
+                v.put("created_at", now());
+                v.put("created_by", currentUsername());
+                s.insertOrThrow("repayments", null, v);
+                out.inserted++;
+            }
+            if (!touchedLoans.contains(loanId)) touchedLoans.add(loanId);
+        }
+        for (String loanId : touchedLoans) {
+            LoanRow loan = findLoan(loanId);
+            recalcLoan(s, loanId);
+            if (loan != null) recalcClient(s, loan.clientId);
+        }
+        return out;
+    }
+
+    private ImportSummary importCollectorRatesCsv(SQLiteDatabase s, CsvData csv, boolean updateExisting) {
+        ImportSummary out = new ImportSummary();
+        for (Map<String, String> row : csv.rows) {
+            String collector = canonicalCollector(val(row, "Collector"));
+            if (collector.isEmpty()) { out.errors.add("Collector rate row missing Collector."); continue; }
+            double csvRate = parsePercent(val(row, "Commission Rate"));
+            double androidRate = defaultCollectorRate(collector);
+            if (androidRate > 0 && Math.abs(csvRate - androidRate) > 0.0001) {
+                out.warnings.add("CSV rate for " + collector + " is " + percent(csvRate) + "; Android rule kept at " + percent(androidRate) + ".");
+                csvRate = androidRate;
+            }
+            boolean exists = scalarInt(s, "SELECT COUNT(*) FROM collector_commission_rates WHERE UPPER(collector_name)=UPPER(?)", new String[]{collector}) > 0;
+            if (exists && !updateExisting) { out.skipped++; continue; }
+            ContentValues v = new ContentValues();
+            v.put("collector_name", collector);
+            v.put("collector_user_id", findCollectorUserId(collector));
+            v.put("commission_rate", csvRate);
+            v.put("commission_type", "Principal Percentage");
+            v.put("active", 1);
+            v.put("effective_date", ISO.format(new Date()));
+            v.put("updated_at", now());
+            if (exists) {
+                s.update("collector_commission_rates", v, "UPPER(collector_name)=UPPER(?)", new String[]{collector});
+                out.updated++;
+            } else {
+                v.put("created_at", now());
+                s.insert("collector_commission_rates", null, v);
+                out.inserted++;
+            }
+        }
+        return out;
+    }
+
+    private ImportSummary compareDashboardReference(CsvData csv) {
+        ImportSummary out = new ImportSummary();
+        Map<String, Double> ref = dashboardReferenceValues(csv);
+        SQLiteDatabase r = db.getReadableDatabase();
+        compareMetric(out, "Active Clients", ref.get("Active Clients"), scalarDouble(r, "SELECT COUNT(*) FROM clients WHERE COALESCE(active,1)=1 AND COALESCE(status,'Active')!='Inactive'", null), 0.01);
+        compareMetric(out, "Active Loans", ref.get("Active Loans"), scalarDouble(r, "SELECT COUNT(*) FROM loans WHERE status='Active'", null), 0.01);
+        compareMetric(out, "Total Principal Released", ref.get("Total Principal Released"), scalarDouble(r, "SELECT COALESCE(SUM(principal),0) FROM loans WHERE status!='Cancelled'", null), 1.0);
+        compareMetric(out, "Total Outstanding", ref.get("Total Outstanding"), scalarDouble(r, "SELECT COALESCE(SUM(balance),0) FROM loans WHERE status='Active'", null), 1.0);
+        String monthStart = new SimpleDateFormat("yyyy-MM-01", Locale.US).format(new Date());
+        String monthEnd = new SimpleDateFormat("yyyy-MM-31", Locale.US).format(new Date());
+        compareMetric(out, "Collection This Month", ref.get("Collection This Month"), scalarDouble(r, "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE voided=0 AND payment_date BETWEEN ? AND ?", new String[]{monthStart, monthEnd}), 1.0);
+        Double overdue = ref.containsKey("Overdue") ? ref.get("Overdue") : ref.get("Overdue Loans");
+        compareMetric(out, "Overdue", overdue, scalarDouble(r, "SELECT COUNT(DISTINCT l.loan_id) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.status!='Paid' AND s.due_date<?", new String[]{ISO.format(new Date())}), 0.01);
+        out.inserted = ref.size();
+        return out;
+    }
+
+    private void validateGoogleCsvHeaders(String type, CsvData csv) throws Exception {
+        if (csv.headers.isEmpty()) throw new Exception("CSV has no headers.");
+        String[] required;
+        if ("Clients".equals(type)) required = new String[]{"Client ID", "Client Name", "Phone", "Barangay/Address", "Date Enrolled / Registered", "Client Status", "Active Loans", "Total Outstanding", "Employment", "Collector", "Valid ID No.", "Valid ID File"};
+        else if ("Loans".equals(type)) required = new String[]{"Loan ID", "Client ID", "Client Name", "Release Date", "Principal", "Interest Rate", "Term Weeks", "Weekly Due", "Total Due", "Balance", "Status", "Next Due Date", "Days Overdue", "Terms", "Employment", "Released Thru", "Reference Number", "Collector", "Maturity Date", "Loan Type", "Collector Commission Rate"};
+        else if ("Payment Schedule".equals(type)) required = new String[]{"Loan ID", "Client Name", "Installment #", "Due Date", "Scheduled Amount", "Paid To Date", "Status", "Days Late"};
+        else if ("Repayments".equals(type)) required = new String[]{"Payment ID", "Loan ID", "Client Name", "Payment Date", "Amount", "Method", "Remarks", "Encoded At", "Void Status", "Voided At", "Voided By", "Void Reason", "Original Amount"};
+        else if ("Collector Commission Rates".equals(type)) required = new String[]{"Collector", "Commission Rate", "Notes"};
+        else if ("Dashboard Reference".equals(type)) {
+            if (csv.rawRows.size() < 2) throw new Exception("Dashboard reference CSV has no metric rows.");
+            return;
+        } else throw new Exception("Unknown import type.");
+        for (String col : required) {
+            if (!csv.headers.contains(col)) throw new Exception("Missing required column: " + col);
+        }
+    }
+
+    private CsvData parseCsv(String text) {
+        CsvData data = new CsvData();
+        List<List<String>> raw = parseCsvRows(text);
+        data.rawRows.addAll(raw);
+        if (raw.isEmpty()) return data;
+        for (String header : raw.get(0)) data.headers.add(safe(header).trim());
+        for (int i = 1; i < raw.size(); i++) {
+            List<String> values = raw.get(i);
+            boolean blankRow = true;
+            for (String v : values) {
+                if (!safe(v).trim().isEmpty()) { blankRow = false; break; }
+            }
+            if (blankRow) continue;
+            Map<String, String> row = new HashMap<>();
+            for (int j = 0; j < data.headers.size(); j++) {
+                row.put(data.headers.get(j), j < values.size() ? safe(values.get(j)).trim() : "");
+            }
+            data.rows.add(row);
+        }
+        return data;
+    }
+
+    private List<List<String>> parseCsvRows(String text) {
+        ArrayList<List<String>> rows = new ArrayList<>();
+        ArrayList<String> row = new ArrayList<>();
+        StringBuilder cell = new StringBuilder();
+        boolean quoted = false;
+        String src = safe(text);
+        for (int i = 0; i < src.length(); i++) {
+            char ch = src.charAt(i);
+            if (ch == '"') {
+                if (quoted && i + 1 < src.length() && src.charAt(i + 1) == '"') {
+                    cell.append('"');
+                    i++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (ch == ',' && !quoted) {
+                row.add(cell.toString());
+                cell.setLength(0);
+            } else if ((ch == '\n' || ch == '\r') && !quoted) {
+                if (ch == '\r' && i + 1 < src.length() && src.charAt(i + 1) == '\n') i++;
+                row.add(cell.toString());
+                rows.add(row);
+                row = new ArrayList<>();
+                cell.setLength(0);
+            } else {
+                cell.append(ch);
+            }
+        }
+        if (cell.length() > 0 || !row.isEmpty()) {
+            row.add(cell.toString());
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private String val(Map<String, String> row, String key) {
+        return row == null ? "" : safe(row.get(key)).trim();
+    }
+
+    private double parseAmount(String raw) {
+        String s = safe(raw).replace("PHP", "").replace("₱", "").replace(",", "").replace("\"", "").trim();
+        if (s.isEmpty() || s.equals("-")) return 0;
+        try { return Double.parseDouble(s); } catch (Exception ex) { return 0; }
+    }
+
+    private double parsePercent(String raw) {
+        String s = safe(raw).replace("%", "").replace(",", "").trim();
+        if (s.isEmpty() || s.equals("-")) return 0;
+        try {
+            double n = Double.parseDouble(s);
+            return n > 1 ? n / 100.0 : n;
+        } catch (Exception ex) {
+            return 0;
+        }
+    }
+
+    private int parseIntSafe(String raw) {
+        return (int) Math.round(parseAmount(raw));
+    }
+
+    private String normalizeActiveStatus(String raw) {
+        return isInactiveText(raw) ? "Inactive" : "Active";
+    }
+
+    private String normalizeLoanStatus(String raw) {
+        String s = safe(raw).trim().toLowerCase(Locale.US);
+        if (s.contains("cancel")) return "Cancelled";
+        if (s.contains("paid")) return "Paid";
+        return "Active";
+    }
+
+    private String normalizeScheduleStatus(String raw) {
+        String s = safe(raw).trim().toLowerCase(Locale.US);
+        if (s.contains("paid")) return "Paid";
+        if (s.contains("partial")) return "Partial";
+        if (s.contains("cancel")) return "Cancelled";
+        return "Open";
+    }
+
+    private String normalizeMethod(String raw) {
+        String s = safe(raw).trim();
+        if (s.equalsIgnoreCase("gcash")) return "GCash";
+        if (s.toLowerCase(Locale.US).contains("bank")) return "Bank Transfer";
+        if (s.equalsIgnoreCase("cash") || s.isEmpty()) return "Cash";
+        return "Other";
+    }
+
+    private boolean isVoidedText(String raw) {
+        String s = safe(raw).trim().toLowerCase(Locale.US);
+        return s.equals("void") || s.equals("voided") || s.equals("yes") || s.equals("true") || s.equals("1");
+    }
+
+    private double defaultCollectorRate(String collector) {
+        String c = canonicalCollector(collector);
+        for (int i = 0; i < COLLECTOR_NAMES.length; i++) {
+            if (COLLECTOR_NAMES[i].equalsIgnoreCase(c)) return COLLECTOR_RATES[i];
+        }
+        return 0;
+    }
+
+    private void recalcAllClientsAfterImport() {
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT client_id FROM clients", null);
+        try {
+            while (c.moveToNext()) recalcClient(c.getString(0));
+        } finally {
+            c.close();
+        }
+    }
+
+    private Map<String, Double> dashboardReferenceValues(CsvData csv) {
+        HashMap<String, Double> out = new HashMap<>();
+        for (List<String> row : csv.rawRows) {
+            for (int i = 0; i < row.size() - 1; i++) {
+                String key = safe(row.get(i)).trim();
+                if (key.equals("Active Clients") || key.equals("Active Loans") || key.equals("Total Principal Released") ||
+                        key.equals("Total Outstanding") || key.equals("Collection This Month") || key.equals("Overdue Loans") ||
+                        key.equals("Overdue Amount") || key.equals("Overdue")) {
+                    out.put(key, parseAmount(row.get(i + 1)));
+                }
+            }
+        }
+        return out;
+    }
+
+    private void compareMetric(ImportSummary out, String label, Double reference, double androidValue, double tolerance) {
+        if (reference == null) {
+            out.warnings.add(label + ": missing from dashboard reference.");
+            return;
+        }
+        double diff = androidValue - reference;
+        String line = label + ": Sheet " + displayMetric(reference) + " | Android " + displayMetric(androidValue) + " | Difference " + displayMetric(diff);
+        if (Math.abs(diff) <= tolerance) out.warnings.add("MATCH - " + line);
+        else out.errors.add("MISMATCH - " + line + "\nPossible causes: import order, skipped duplicates, voided payments, status normalization, collection month date range, or balances not recalculated after import.");
+    }
+
+    private String displayMetric(double n) {
+        if (Math.abs(n - Math.round(n)) < 0.001) return String.valueOf((long) Math.round(n));
+        return peso(n);
     }
 
     private ContentValues jsonRowToValues(JSONObject row) throws Exception {
@@ -1158,6 +1948,10 @@ public class MainActivity extends Activity {
                     labels.add("History");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForLoan(loanId); }});
                 }
+                if (canPrintLoanReleaseForm(loanId)) {
+                    labels.add("Print Form");
+                    listeners.add(new View.OnClickListener() { public void onClick(View v) { printLoanReleaseForm(loanId); }});
+                }
                 if (canCancelLoan()) {
                     labels.add("Cancel loan");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showCancelLoanDialog(loanId); }});
@@ -1478,6 +2272,7 @@ public class MainActivity extends Activity {
 
     private void showWeeklyCollection() {
         clear("Weekly Collection Sheet");
+        addAction("Print Collection Sheet", new View.OnClickListener() { public void onClick(View v) { showCollectionSheetPrintDialog(); }});
         Calendar end = Calendar.getInstance();
         end.add(Calendar.DAY_OF_MONTH, 6);
         addScheduleList(scopedScheduleSql("s.status!='Paid' AND s.due_date<=? ORDER BY l.collector,s.due_date"),
@@ -1609,6 +2404,7 @@ public class MainActivity extends Activity {
     private void showDailyCollectionReport(ReportFilter f) {
         clear("Daily Collection Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printDailyCollectionReport(f); }});
         SQLiteDatabase r = db.getReadableDatabase();
         ArrayList<String> args = new ArrayList<>();
         String where = reportPaymentWhere(f, args, true);
@@ -1646,6 +2442,7 @@ public class MainActivity extends Activity {
     private void showWeeklyCollectionReport(ReportFilter f) {
         clear("Weekly Collection Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printWeeklyCollectionReport(f); }});
         SQLiteDatabase r = db.getReadableDatabase();
         ArrayList<String> args = new ArrayList<>();
         String schedWhere = reportScheduleWhere(f, args);
@@ -1683,6 +2480,7 @@ public class MainActivity extends Activity {
         if (!canOpenReport("Overdue")) { notAllowed(); return; }
         clear("Overdue Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printOverdueReport(f); }});
         addCopySummary("Overdue Report\nAs of: " + f.endDate + "\nCollector: " + (isCollector() ? currentUser.collectorName : "All"));
         ArrayList<String> args = new ArrayList<>();
         args.add(f.endDate);
@@ -1709,6 +2507,7 @@ public class MainActivity extends Activity {
         if (!canOpenReport("Loan Release")) { notAllowed(); return; }
         clear("Loan Release Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printLoanReleaseReport(f); }});
         ArrayList<String> args = new ArrayList<>();
         String where = "release_date BETWEEN ? AND ?";
         args.add(f.startDate); args.add(f.endDate);
@@ -1736,6 +2535,7 @@ public class MainActivity extends Activity {
         if (!canOpenReport("Fully Paid Loans")) { notAllowed(); return; }
         clear("Fully Paid Loans Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printFullyPaidLoansReport(f); }});
         ArrayList<String> args = new ArrayList<>();
         String where = "l.status='Paid'";
         where += reportCollectorClause(f, args);
@@ -2013,6 +2813,7 @@ public class MainActivity extends Activity {
         if (!canViewCommissionReports()) { notAllowed(); return; }
         clear("Commission Release History");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printCommissionReleaseReport(collectorFilter); }});
         ArrayList<String> args = new ArrayList<>();
         String where = "1=1";
         if (isCollector()) { where += " AND UPPER(COALESCE(collector,''))=UPPER(?)"; args.add(currentUser.collectorName); }
@@ -2034,6 +2835,7 @@ public class MainActivity extends Activity {
         if (!canViewCommissionReports()) { notAllowed(); return; }
         clear("Commission Summary Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printCommissionSummaryReport(); }});
         addCommissionSummaryCards(null);
     }
 
@@ -2371,7 +3173,7 @@ public class MainActivity extends Activity {
                         s.endTransaction();
                     }
                     recalcClient(cr.id);
-                    showLoans();
+                    showLoanReleasePrintScreen(loanId);
                 })
                 .setNegativeButton("Back", null)
                 .show();
@@ -2418,7 +3220,7 @@ public class MainActivity extends Activity {
                         audit(s, "Post payment", "repayment", paymentId, "Posted " + peso(amount) + " receipt " + receipt + " for " + lr.id, currentUsername());
                         s.setTransactionSuccessful();
                         toast("Payment posted. Receipt: " + receipt);
-                        showLoans();
+                        showPaymentReceiptScreen(paymentId);
                     } catch (Exception ex) {
                         toast("Payment failed: " + ex.getMessage());
                     } finally {
@@ -2465,8 +3267,17 @@ public class MainActivity extends Activity {
                         "\nAmount: " + peso(c.getDouble(3)) + "\nMethod: " + safe(c.getString(4)) +
                         "\nPosted by: " + safe(c.getString(5)) + "\nRemarks: " + safe(c.getString(6)) +
                         "\nStatus: " + (voided ? "VOID - " + safe(c.getString(8)) : "Active");
-                addCard(paymentId, body, voided ? null : "Void payment",
-                        voided ? null : new View.OnClickListener() { public void onClick(View v) { showVoidPaymentDialog(paymentId); }});
+                ArrayList<String> labels = new ArrayList<>();
+                ArrayList<View.OnClickListener> listeners = new ArrayList<>();
+                if (canPrintReceipt(paymentId)) {
+                    labels.add(voided ? "Print Receipt" : "Reprint Receipt");
+                    listeners.add(new View.OnClickListener() { public void onClick(View v) { printPaymentReceipt(paymentId); }});
+                }
+                if (!voided && canVoidPayment()) {
+                    labels.add("Void payment");
+                    listeners.add(new View.OnClickListener() { public void onClick(View v) { showVoidPaymentDialog(paymentId); }});
+                }
+                addCard(paymentId, body, labels.toArray(new String[0]), listeners.toArray(new View.OnClickListener[0]));
             } while (c.moveToNext());
         } finally {
             c.close();
@@ -2622,28 +3433,204 @@ public class MainActivity extends Activity {
         LoanRow lr = findLoan(loanId);
         if (lr == null) { toast("Loan not found."); return; }
         if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
-        audit(db.getWritableDatabase(), "Print passbook", "loan", loanId, "Printed passbook for " + loanId, currentUsername());
+        LoanDetail detail = findLoanDetail(loanId);
         StringBuilder rows = new StringBuilder();
         Cursor c = db.getReadableDatabase().rawQuery("SELECT installment_no,due_date,scheduled_amount,paid_to_date,status FROM schedule WHERE loan_id=? ORDER BY installment_no", new String[]{loanId});
         try {
             while (c.moveToNext()) {
-                rows.append("<tr><td>").append(c.getInt(0)).append("</td><td>").append(c.getString(1)).append("</td><td>")
-                        .append(peso(c.getDouble(2))).append("</td><td>").append(peso(c.getDouble(3))).append("</td><td>")
-                        .append(c.getString(4)).append("</td><td></td></tr>");
+                rows.append(tr(td(String.valueOf(c.getInt(0))) + td(c.getString(1)) + td(peso(c.getDouble(2))) +
+                        td(peso(c.getDouble(3))) + td(c.getString(4)) + td("")));
             }
         } finally {
             c.close();
         }
-        String html = "<html><head><style>body{font-family:sans-serif}h1{color:#000f96}table{width:100%;border-collapse:collapse}td,th{border:1px solid #93c5fd;padding:6px}th{background:#000f96;color:white}.meta{font-weight:bold}</style></head><body>" +
-                "<h1>BORROWER PASSBOOK</h1><p class='meta'>A&L Alalay Microlending Services</p>" +
-                "<p>Loan ID: " + lr.id + "<br>Borrower: " + lr.clientName + "<br>Total Due: " + peso(lr.totalDue) + "<br>Balance: " + peso(lr.balance) + "</p>" +
-                "<table><tr><th>#</th><th>Due Date</th><th>Due</th><th>Paid</th><th>Status</th><th>Collector Signature</th></tr>" + rows + "</table></body></html>";
+        StringBuilder payments = new StringBuilder();
+        Cursor p = db.getReadableDatabase().rawQuery("SELECT payment_date,amount,receipt_number,method,encoded_at FROM repayments WHERE loan_id=? AND voided=0 ORDER BY payment_date,encoded_at", new String[]{loanId});
+        try {
+            while (p.moveToNext()) {
+                payments.append(tr(td(p.getString(0)) + td(peso(p.getDouble(1))) + td(peso(balanceAfterPayment(loanId, p.getString(4)))) +
+                        td(p.getString(2)) + td(p.getString(3)) + td(detail == null ? "" : detail.collector)));
+            }
+        } finally {
+            p.close();
+        }
+        String body = "<div class='meta'><b>A&L Alalay Microlending Services</b></div>" +
+                "<h1>BORROWER PASSBOOK</h1>" +
+                metaTable(new String[][]{
+                        {"Borrower", lr.clientName},
+                        {"Loan Account Number", lr.id},
+                        {"Principal", detail == null ? "" : peso(detail.principal)},
+                        {"Total Payable", peso(lr.totalDue)},
+                        {"Balance", peso(lr.balance)},
+                        {"Collector", detail == null ? "" : detail.collector}
+                }) +
+                "<h2>Payment Schedule</h2><table><tr><th>#</th><th>Due Date</th><th>Due</th><th>Paid</th><th>Status</th><th>Collector Signature</th></tr>" + rows + "</table>" +
+                "<h2>Payment History</h2><table><tr><th>Date Paid</th><th>Amount Paid</th><th>Balance</th><th>Receipt #</th><th>Method</th><th>Collector</th></tr>" + payments + "</table>";
+        String html = htmlPage("Borrower Passbook", body);
         WebView web = new WebView(this);
         web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
         web.postDelayed(() -> {
             PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
             if (pm != null) pm.print("Passbook-" + loanId, web.createPrintDocumentAdapter("Passbook-" + loanId), new PrintAttributes.Builder().build());
         }, 800);
+        audit(db.getWritableDatabase(), "Passbook print/PDF generated", "loan", loanId, "Generated passbook print/PDF for " + loanId, currentUsername());
+    }
+
+    private void showPaymentReceiptScreen(final String paymentId) {
+        clear("Payment Receipt");
+        addAction("Back to Loans", new View.OnClickListener() { public void onClick(View v) { showLoans(); }});
+        addAction("View/Print Receipt", new View.OnClickListener() { public void onClick(View v) { printPaymentReceipt(paymentId); }});
+        addCard("Receipt Ready", paymentReceiptSummary(paymentId), (String) null, (View.OnClickListener) null);
+    }
+
+    private void showLoanReleasePrintScreen(final String loanId) {
+        clear("Loan Release Form");
+        addAction("Back to Loans", new View.OnClickListener() { public void onClick(View v) { showLoans(); }});
+        addAction("Print Loan Release Form", new View.OnClickListener() { public void onClick(View v) { printLoanReleaseForm(loanId); }});
+        LoanDetail d = findLoanDetail(loanId);
+        addCard("Loan Released", d == null ? loanId : "Loan: " + d.loanId + "\nBorrower: " + d.clientName + "\nPrincipal: " + peso(d.principal) + "\nTotal Payable: " + peso(d.totalDue) + "\nCollector: " + d.collector, (String) null, (View.OnClickListener) null);
+    }
+
+    private String paymentReceiptSummary(String paymentId) {
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT r.receipt_number,r.payment_date,r.encoded_at,r.client_name,r.loan_id,r.amount,r.method,l.balance,l.collector,r.posted_by,r.voided FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.payment_id=?", new String[]{paymentId});
+        try {
+            if (!c.moveToFirst()) return "Payment not found.";
+            return "Receipt: " + safe(c.getString(0)) + "\nDate/Time: " + safe(c.getString(2)) +
+                    "\nBorrower: " + safe(c.getString(3)) + "\nLoan: " + safe(c.getString(4)) +
+                    "\nAmount: " + peso(c.getDouble(5)) + "\nMethod: " + safe(c.getString(6)) +
+                    "\nRemaining Balance: " + peso(c.getDouble(7)) + "\nCollector: " + safe(c.getString(8)) +
+                    "\nPosted by: " + safe(c.getString(9)) + "\nStatus: " + (c.getInt(10) == 1 ? "VOIDED" : "Active");
+        } finally {
+            c.close();
+        }
+    }
+
+    private void printPaymentReceipt(String paymentId) {
+        if (!canPrintReceipt(paymentId)) { notAllowed(); return; }
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT r.receipt_number,r.payment_date,r.encoded_at,r.client_name,r.loan_id,r.amount,r.method,l.balance,l.collector,r.posted_by,r.voided,r.void_reason FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.payment_id=?", new String[]{paymentId});
+        try {
+            if (!c.moveToFirst()) { toast("Payment not found."); return; }
+            String status = c.getInt(10) == 1 ? "VOIDED - " + safe(c.getString(11)) : "Active";
+            String body = "<div class='meta'><b>A&L Alalay Microlending Services</b></div><h1>Payment Receipt</h1>" +
+                    metaTable(new String[][]{
+                            {"Receipt Number", c.getString(0)},
+                            {"Date/Time", safe(c.getString(2)).isEmpty() ? c.getString(1) : c.getString(2)},
+                            {"Borrower Name", c.getString(3)},
+                            {"Loan Account Number", c.getString(4)},
+                            {"Payment Amount", peso(c.getDouble(5))},
+                            {"Payment Method", c.getString(6)},
+                            {"Remaining Balance", peso(c.getDouble(7))},
+                            {"Collector", c.getString(8)},
+                            {"Posted By", c.getString(9)},
+                            {"Status", status}
+                    }) + signatureBlock("Borrower Signature", "Collector/Cashier Signature");
+            printHtml("Receipt-" + safe(c.getString(0)), htmlPage("Payment Receipt", body), "Receipt print/PDF generated", "repayment", paymentId, "Generated receipt print/PDF " + safe(c.getString(0)));
+        } finally {
+            c.close();
+        }
+    }
+
+    private void printLoanReleaseForm(String loanId) {
+        if (!canPrintLoanReleaseForm(loanId)) { notAllowed(); return; }
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT l.loan_id,l.reference_number,l.client_name,c.phone,c.address,l.principal,l.interest_rate,l.total_due,l.term_weeks,l.weekly_due,l.release_date,l.released_thru,l.collector,l.created_by,l.status FROM loans l LEFT JOIN clients c ON c.client_id=l.client_id WHERE l.loan_id=?", new String[]{loanId});
+        try {
+            if (!c.moveToFirst()) { toast("Loan not found."); return; }
+            StringBuilder sched = new StringBuilder();
+            Cursor s = db.getReadableDatabase().rawQuery("SELECT installment_no,due_date,scheduled_amount,status FROM schedule WHERE loan_id=? ORDER BY installment_no", new String[]{loanId});
+            try {
+                while (s.moveToNext()) sched.append(tr(td(String.valueOf(s.getInt(0))) + td(s.getString(1)) + td(peso(s.getDouble(2))) + td(s.getString(3))));
+            } finally { s.close(); }
+            String body = "<div class='meta'><b>A&L Alalay Microlending Services</b></div><h1>Loan Release Form</h1>" +
+                    metaTable(new String[][]{
+                            {"Loan Account Number", c.getString(0)},
+                            {"Release Number", safe(c.getString(1)).isEmpty() ? c.getString(0) : c.getString(1)},
+                            {"Borrower", c.getString(2)},
+                            {"Contact Number", c.getString(3)},
+                            {"Address", c.getString(4)},
+                            {"Principal Amount", peso(c.getDouble(5))},
+                            {"Interest Rate", percent(c.getDouble(6))},
+                            {"Total Payable", peso(c.getDouble(7))},
+                            {"Term/Frequency", c.getInt(8) + " weekly payments at " + peso(c.getDouble(9))},
+                            {"Release Date", c.getString(10)},
+                            {"Release Method", c.getString(11)},
+                            {"Collector", c.getString(12)},
+                            {"Released By", c.getString(13)},
+                            {"Status", c.getString(14)}
+                    }) +
+                    "<h2>Due Dates / Payment Schedule</h2><table><tr><th>#</th><th>Due Date</th><th>Amount Due</th><th>Status</th></tr>" + sched + "</table>" +
+                    "<h2>ID / Photo Placeholders</h2><div class='boxes'><div>ID Front</div><div>ID Back / Photo</div></div>" +
+                    signatureBlock("Borrower Signature", "Released By Signature");
+            printHtml("LoanRelease-" + loanId, htmlPage("Loan Release Form", body), "Loan release print/PDF generated", "loan", loanId, "Generated loan release print/PDF for " + loanId);
+        } finally {
+            c.close();
+        }
+    }
+
+    private void showCollectionSheetPrintDialog() {
+        if (!requirePermission(canPrintCollectionSheet())) return;
+        LinearLayout form = form();
+        final EditText collector = input("Collector or All");
+        final EditText date = input("Date yyyy-MM-dd");
+        date.setText(ISO.format(new Date()));
+        if (isCollector()) {
+            collector.setText(currentUser.collectorName);
+            collector.setEnabled(false);
+        } else {
+            collector.setText("All");
+        }
+        Button pickCollector = new Button(this);
+        pickCollector.setText("Pick Collector");
+        pickCollector.setAllCaps(false);
+        pickCollector.setOnClickListener(v -> showCollectorPicker(collector));
+        Button allCollectors = new Button(this);
+        allCollectors.setText("All Collectors");
+        allCollectors.setAllCaps(false);
+        allCollectors.setOnClickListener(v -> collector.setText("All"));
+        Button pickDate = new Button(this);
+        pickDate.setText("Pick Date");
+        pickDate.setAllCaps(false);
+        pickDate.setOnClickListener(v -> showDatePicker(date));
+        form.addView(collector);
+        if (!isCollector()) form.addView(pickCollector);
+        if (!isCollector()) form.addView(allCollectors);
+        form.addView(date);
+        form.addView(pickDate);
+        new AlertDialog.Builder(this)
+                .setTitle("Print Collection Sheet")
+                .setView(form)
+                .setPositiveButton("Print", (d, w) -> {
+                    if (!validDateOrBlank(date)) { toast("Date must use YYYY-MM-DD."); return; }
+                    printCollectionSheet(text(collector), text(date).isEmpty() ? ISO.format(new Date()) : text(date));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void printCollectionSheet(String collectorFilter, String date) {
+        if (!canPrintCollectionSheet()) { notAllowed(); return; }
+        String collector = isCollector() ? currentUser.collectorName : (isAll(collectorFilter) ? "All" : collectorFilter);
+        ArrayList<String> args = new ArrayList<>();
+        args.add(date);
+        String where = "s.status!='Paid' AND s.due_date<=?";
+        if (!isAll(collector)) {
+            where += " AND UPPER(COALESCE(l.collector,''))=UPPER(?)";
+            args.add(collector);
+        }
+        StringBuilder rows = new StringBuilder();
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT l.collector,l.client_name,c.phone,c.address,l.loan_id,s.scheduled_amount,s.paid_to_date,l.balance,s.status FROM schedule s JOIN loans l ON l.loan_id=s.loan_id LEFT JOIN clients c ON c.client_id=l.client_id WHERE " + where + " ORDER BY l.collector,l.client_name,s.due_date", args.toArray(new String[0]));
+        try {
+            while (c.moveToNext()) {
+                double due = Math.max(0, c.getDouble(5) - c.getDouble(6));
+                rows.append(tr(td(c.getString(0)) + td(c.getString(1)) + td(c.getString(2)) + td(c.getString(3)) +
+                        td(c.getString(4)) + td(peso(due)) + td(peso(c.getDouble(6))) + td(peso(c.getDouble(7))) +
+                        td(c.getString(8)) + td("")));
+            }
+        } finally { c.close(); }
+        if (rows.length() == 0) rows.append(tr("<td colspan='10'>No due borrowers found.</td>"));
+        String body = "<div class='meta'><b>A&L Alalay Microlending Services</b></div><h1>Collector Collection Sheet</h1>" +
+                metaTable(new String[][]{{"Collector", collector}, {"Date", date}, {"Printed By", currentUsername()}}) +
+                "<table><tr><th>Collector</th><th>Due Borrower</th><th>Contact</th><th>Address</th><th>Loan Account</th><th>Amount Due</th><th>Amount Paid</th><th>Balance</th><th>Status</th><th>Signature / Remarks</th></tr>" + rows + "</table>";
+        printHtml("CollectionSheet-" + date, htmlPage("Collection Sheet", body), "Collection sheet print/PDF generated", "collection_sheet", date, "Generated collection sheet for " + collector + " as of " + date);
     }
 
     private void seedSampleData() {
@@ -3016,7 +4003,17 @@ public class MainActivity extends Activity {
     private boolean canViewPaymentHistory() { return isAdmin() || isCashier() || isCollector() || isViewer(); }
     private boolean canVoidPayment() { return isAdmin(); }
     private boolean canCancelLoan() { return isAdmin(); }
-    private boolean canPrintPassbook() { return currentUser != null; }
+    private boolean canPrintPassbook() { return isAdmin() || isCollector(); }
+    private boolean canPrintCollectionSheet() { return isAdmin() || isCashier() || isCollector(); }
+    private boolean canPrintLoanReleaseForm(String loanId) {
+        return isAdmin();
+    }
+    private boolean canPrintReceipt(String paymentId) {
+        if (!(isAdmin() || isCashier() || isCollector())) return false;
+        PaymentRow pr = findPayment(paymentId);
+        if (pr == null) return false;
+        return !isCollector() || collectorOwnsLoan(pr.loanId);
+    }
 
     private boolean requireAdmin() {
         return requirePermission(isAdmin());
@@ -3235,6 +4232,111 @@ public class MainActivity extends Activity {
         return args.toArray(new String[0]);
     }
 
+    private void printDailyCollectionReport(ReportFilter f) {
+        if (!canOpenReport("Daily Collection")) { notAllowed(); return; }
+        ArrayList<String> args = new ArrayList<>();
+        String where = reportPaymentWhere(f, args, true);
+        double total = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE " + where + " AND r.voided=0", args.toArray(new String[0]));
+        int count = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE " + where + " AND r.voided=0", args.toArray(new String[0]));
+        String rows = htmlRows("SELECT r.client_name,r.loan_id,r.receipt_number,r.amount,r.method,r.posted_by,r.payment_date,r.encoded_at,CASE WHEN r.voided=1 THEN 'VOIDED' ELSE 'VALID' END FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE " + where + " ORDER BY r.encoded_at DESC",
+                args.toArray(new String[0]), new int[]{3});
+        String body = reportHeader("Daily Collection Report", "Date: " + f.startDate + " | Collector: " + f.collector + " | Method: " + f.method + " | Total: " + peso(total) + " | Valid payments: " + count) +
+                table(new String[]{"Borrower", "Loan Account", "Receipt", "Amount", "Method", "Posted By", "Payment Date", "Encoded At", "Status"}, rows);
+        printHtml("DailyCollection-" + f.startDate, htmlPage("Daily Collection Report", body), "Report print/PDF generated", "report", "Daily Collection", "Generated Daily Collection Report print/PDF");
+    }
+
+    private void printWeeklyCollectionReport(ReportFilter f) {
+        if (!canOpenReport("Weekly Collection")) { notAllowed(); return; }
+        ArrayList<String> args = new ArrayList<>();
+        String where = reportScheduleWhere(f, args);
+        double expected = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(s.scheduled_amount),0) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE " + where, args.toArray(new String[0]));
+        String rows = htmlRows("SELECT l.client_name,l.loan_id,l.collector,s.due_date,s.scheduled_amount,s.paid_to_date,l.balance,s.status FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE " + where + " ORDER BY s.due_date,l.client_name",
+                args.toArray(new String[0]), new int[]{4,5,6});
+        String body = reportHeader("Weekly Collection Report", "Range: " + f.startDate + " to " + f.endDate + " | Collector: " + f.collector + " | Expected: " + peso(expected)) +
+                table(new String[]{"Borrower", "Loan Account", "Collector", "Due Date", "Expected", "Paid", "Balance", "Status"}, rows);
+        printHtml("WeeklyCollection-" + f.startDate, htmlPage("Weekly Collection Report", body), "Report print/PDF generated", "report", "Weekly Collection", "Generated Weekly Collection Report print/PDF");
+    }
+
+    private void printOverdueReport(ReportFilter f) {
+        if (!canOpenReport("Overdue")) { notAllowed(); return; }
+        ArrayList<String> args = new ArrayList<>();
+        args.add(f.endDate);
+        String where = "s.status!='Paid' AND s.due_date<?";
+        if (isCollector()) { where += " AND UPPER(COALESCE(l.collector,''))=UPPER(?)"; args.add(currentUser.collectorName); }
+        where += reportBorrowerLoanClause(f, args, "l");
+        String rows = htmlRows("SELECT l.client_name,c.phone,c.address,l.loan_id,l.collector,s.due_date,s.scheduled_amount,s.paid_to_date,l.balance,s.status FROM schedule s JOIN loans l ON l.loan_id=s.loan_id LEFT JOIN clients c ON c.client_id=l.client_id WHERE " + where + " ORDER BY s.due_date ASC",
+                args.toArray(new String[0]), new int[]{6,7,8});
+        String body = reportHeader("Overdue Report", "As of: " + f.endDate + " | Collector: " + (isCollector() ? currentUser.collectorName : f.collector)) +
+                table(new String[]{"Borrower", "Contact", "Address", "Loan Account", "Collector", "Due Date", "Amount Due", "Paid", "Balance", "Status"}, rows);
+        printHtml("Overdue-" + f.endDate, htmlPage("Overdue Report", body), "Report print/PDF generated", "report", "Overdue", "Generated Overdue Report print/PDF");
+    }
+
+    private void printLoanReleaseReport(ReportFilter f) {
+        if (!canOpenReport("Loan Release")) { notAllowed(); return; }
+        ArrayList<String> args = new ArrayList<>();
+        String where = "l.release_date BETWEEN ? AND ?";
+        args.add(f.startDate); args.add(f.endDate);
+        where += reportCollectorClauseWithAlias(f, args, "l");
+        where += reportBorrowerLoanClause(f, args, "l");
+        if (!isAll(f.releasedBy)) { where += " AND UPPER(COALESCE(l.created_by,''))=UPPER(?)"; args.add(f.releasedBy); }
+        double total = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(l.principal),0) FROM loans l WHERE " + where, args.toArray(new String[0]));
+        String rows = htmlRows("SELECT l.loan_id,l.client_name,c.phone,c.address,l.release_date,l.principal,l.interest_rate,l.total_due,l.released_thru,l.collector,l.created_by,l.status FROM loans l LEFT JOIN clients c ON c.client_id=l.client_id WHERE " + where + " ORDER BY l.release_date DESC",
+                args.toArray(new String[0]), new int[]{5,7});
+        String body = reportHeader("Loan Release Report", "Range: " + f.startDate + " to " + f.endDate + " | Collector: " + f.collector + " | Released by: " + f.releasedBy + " | Principal: " + peso(total)) +
+                table(new String[]{"Loan Account", "Borrower", "Contact", "Address", "Release Date", "Principal", "Interest Rate", "Total Payable", "Method", "Collector", "Released By", "Status"}, rows);
+        printHtml("LoanReleaseReport-" + f.startDate, htmlPage("Loan Release Report", body), "Report print/PDF generated", "report", "Loan Release", "Generated Loan Release Report print/PDF");
+    }
+
+    private void printFullyPaidLoansReport(ReportFilter f) {
+        if (!canOpenReport("Fully Paid Loans")) { notAllowed(); return; }
+        ArrayList<String> args = new ArrayList<>();
+        String where = "l.status='Paid' AND l.updated_at BETWEEN ? AND ?";
+        args.add(f.startDate + " 00:00:00"); args.add(f.endDate + " 23:59:59");
+        where += reportCollectorClauseWithAlias(f, args, "l");
+        where += reportBorrowerLoanClause(f, args, "l");
+        String rows = htmlRows("SELECT l.client_name,l.loan_id,l.collector,l.principal,l.total_due,l.balance,l.updated_at FROM loans l WHERE " + where + " ORDER BY l.updated_at DESC",
+                args.toArray(new String[0]), new int[]{3,4,5});
+        String body = reportHeader("Fully Paid Loans Report", "Range: " + f.startDate + " to " + f.endDate + " | Collector: " + f.collector) +
+                table(new String[]{"Borrower", "Loan Account", "Collector", "Principal", "Total Payable", "Balance", "Paid/Updated At"}, rows);
+        printHtml("FullyPaidLoans-" + f.startDate, htmlPage("Fully Paid Loans Report", body), "Report print/PDF generated", "report", "Fully Paid Loans", "Generated Fully Paid Loans Report print/PDF");
+    }
+
+    private void printCommissionSummaryReport() {
+        if (!canViewCommissionReports()) { notAllowed(); return; }
+        ArrayList<String> collectors = new ArrayList<>();
+        if (isCollector()) collectors.add(currentUser.collectorName);
+        else {
+            Cursor c = db.getReadableDatabase().rawQuery("SELECT DISTINCT collector FROM commission_ledger WHERE COALESCE(collector,'')!='' ORDER BY collector", null);
+            try { while (c.moveToNext()) collectors.add(c.getString(0)); } finally { c.close(); }
+        }
+        StringBuilder rows = new StringBuilder();
+        for (String collector : collectors) {
+            double availableEarned = commissionStatusTotal(collector, "Available");
+            double released = -commissionStatusTotal(collector, "Released");
+            double held = commissionStatusTotal(collector, "Held");
+            double reversed = commissionStatusTotal(collector, "Reversed");
+            double remaining = commissionAvailable(collector);
+            rows.append(tr(td(collector) + td(peso(availableEarned)) + td(peso(released)) + td(peso(held)) + td(peso(reversed)) + td(peso(remaining))));
+        }
+        if (rows.length() == 0) rows.append(tr("<td colspan='6'>No commission ledger entries found.</td>"));
+        String body = reportHeader("Commission Summary Report", "Printed by: " + currentUsername()) +
+                table(new String[]{"Collector", "Available Earned", "Released", "Held", "Reversed", "Remaining Balance"}, rows.toString());
+        printHtml("CommissionSummary", htmlPage("Commission Summary Report", body), "Report print/PDF generated", "report", "Commission Summary", "Generated Commission Summary Report print/PDF");
+    }
+
+    private void printCommissionReleaseReport(String collectorFilter) {
+        if (!canViewCommissionReports()) { notAllowed(); return; }
+        ArrayList<String> args = new ArrayList<>();
+        String where = "1=1";
+        if (isCollector()) { where += " AND UPPER(COALESCE(collector,''))=UPPER(?)"; args.add(currentUser.collectorName); }
+        else if (!isAll(collectorFilter)) { where += " AND UPPER(COALESCE(collector,''))=UPPER(?)"; args.add(collectorFilter); }
+        String rows = htmlRows("SELECT release_number,release_date,collector,amount,method,released_by,remarks,status FROM commission_releases WHERE " + where + " ORDER BY release_date DESC",
+                args.toArray(new String[0]), new int[]{3});
+        String body = reportHeader("Commission Release Report", "Collector: " + (isCollector() ? currentUser.collectorName : (isAll(collectorFilter) ? "All" : collectorFilter))) +
+                table(new String[]{"Release Number", "Date/Time", "Collector", "Amount", "Method", "Released By", "Remarks", "Status"}, rows);
+        printHtml("CommissionReleaseReport", htmlPage("Commission Release Report", body), "Report print/PDF generated", "report", "Commission Release", "Generated Commission Release Report print/PDF");
+    }
+
     private void addCopySummary(final String summary) {
         addCard("Summary", summary, "Copy Summary", new View.OnClickListener() {
             public void onClick(View v) {
@@ -3377,6 +4479,78 @@ public class MainActivity extends Activity {
     private String text(EditText e) { return e.getText().toString().trim(); }
     private String safe(String s) { return s == null ? "" : s; }
     private String peso(double n) { return money.format(n).replace("PHP", "PHP "); }
+    private String h(String s) {
+        return safe(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+    private String td(String s) { return "<td>" + h(s) + "</td>"; }
+    private String tr(String cells) { return "<tr>" + cells + "</tr>"; }
+    private String table(String[] headers, String rows) {
+        StringBuilder out = new StringBuilder("<table><tr>");
+        for (String header : headers) out.append("<th>").append(h(header)).append("</th>");
+        out.append("</tr>");
+        out.append(rows == null || rows.length() == 0 ? tr("<td colspan='" + headers.length + "'>No records found.</td>") : rows);
+        out.append("</table>");
+        return out.toString();
+    }
+    private String metaTable(String[][] rows) {
+        StringBuilder out = new StringBuilder("<table class='meta-table'>");
+        for (String[] row : rows) {
+            out.append("<tr><th>").append(h(row[0])).append("</th><td>").append(h(row.length > 1 ? row[1] : "")).append("</td></tr>");
+        }
+        out.append("</table>");
+        return out.toString();
+    }
+    private String signatureBlock(String left, String right) {
+        return "<div class='signatures'><div><span></span><p>" + h(left) + "</p></div><div><span></span><p>" + h(right) + "</p></div></div>";
+    }
+    private String reportHeader(String title, String subtitle) {
+        return "<div class='meta'><b>A&L Alalay Microlending Services</b><br>Printed: " + h(now()) + "<br>Printed by: " + h(currentUsername()) + "</div><h1>" + h(title) + "</h1><p>" + h(subtitle) + "</p>";
+    }
+    private String htmlPage(String title, String body) {
+        return "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>" +
+                "body{font-family:sans-serif;color:#0f172a;margin:24px}h1{color:#000f96;font-size:24px;margin:8px 0 12px}h2{color:#000f96;font-size:17px;margin-top:18px}.meta{font-size:13px;margin-bottom:10px}" +
+                "table{width:100%;border-collapse:collapse;margin:10px 0 16px}td,th{border:1px solid #93c5fd;padding:6px;font-size:12px;vertical-align:top}th{background:#000f96;color:white;text-align:left}.meta-table th{width:34%}.meta-table th,.meta-table td{background:white;color:#0f172a}" +
+                ".signatures{display:flex;gap:48px;margin-top:42px}.signatures div{flex:1;text-align:center}.signatures span{display:block;border-top:1px solid #0f172a;height:1px}.signatures p{font-size:12px;margin-top:8px}.boxes{display:flex;gap:16px;margin:12px 0 20px}.boxes div{height:96px;flex:1;border:1px dashed #64748b;text-align:center;padding-top:38px;color:#64748b}" +
+                "@media print{body{margin:12px}.no-print{display:none}}" +
+                "</style></head><body>" + body + "</body></html>";
+    }
+    private void printHtml(final String jobName, final String html, String auditAction, String entityType, String entityId, String details) {
+        WebView web = new WebView(this);
+        web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+        web.postDelayed(() -> {
+            PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+            if (pm != null) pm.print(jobName, web.createPrintDocumentAdapter(jobName), new PrintAttributes.Builder().build());
+        }, 800);
+        audit(db.getWritableDatabase(), auditAction, entityType, entityId, details, currentUsername());
+    }
+    private String htmlRows(String sql, String[] args, int[] moneyColumns) {
+        StringBuilder rows = new StringBuilder();
+        Cursor c = db.getReadableDatabase().rawQuery(sql, args);
+        try {
+            while (c.moveToNext()) {
+                StringBuilder cells = new StringBuilder();
+                for (int i = 0; i < c.getColumnCount(); i++) {
+                    boolean isMoney = false;
+                    if (moneyColumns != null) {
+                        for (int col : moneyColumns) {
+                            if (col == i) { isMoney = true; break; }
+                        }
+                    }
+                    cells.append(td(isMoney ? peso(c.getDouble(i)) : safe(c.getString(i))));
+                }
+                rows.append(tr(cells.toString()));
+            }
+        } finally {
+            c.close();
+        }
+        return rows.toString();
+    }
+    private double balanceAfterPayment(String loanId, String encodedAt) {
+        LoanDetail d = findLoanDetail(loanId);
+        if (d == null) return 0;
+        double paid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE loan_id=? AND voided=0 AND encoded_at<=?", new String[]{loanId, safe(encodedAt)});
+        return Math.max(0, d.totalDue - paid);
+    }
     private double round2(double n) { return Math.round(n * 100.0) / 100.0; }
     private String percent(double rate) { return String.format(Locale.US, "%.2f%%", rate * 100.0); }
     private double number(EditText e) {
@@ -3542,6 +4716,40 @@ public class MainActivity extends Activity {
             this.filePrefix = filePrefix;
             this.sql = sql;
             this.args = args;
+        }
+    }
+
+    private static class CsvData {
+        final ArrayList<String> headers = new ArrayList<>();
+        final ArrayList<Map<String, String>> rows = new ArrayList<>();
+        final ArrayList<List<String>> rawRows = new ArrayList<>();
+    }
+
+    private static class ImportSummary {
+        int inserted, updated, skipped;
+        final ArrayList<String> warnings = new ArrayList<>();
+        final ArrayList<String> errors = new ArrayList<>();
+        String shortLine() {
+            return "inserted=" + inserted + ", updated=" + updated + ", skipped=" + skipped + ", warnings=" + warnings.size() + ", errors=" + errors.size();
+        }
+        String fullText() {
+            StringBuilder out = new StringBuilder();
+            out.append("Inserted: ").append(inserted)
+                    .append("\nUpdated: ").append(updated)
+                    .append("\nSkipped duplicates: ").append(skipped)
+                    .append("\nWarnings: ").append(warnings.size())
+                    .append("\nErrors: ").append(errors.size());
+            if (!warnings.isEmpty()) {
+                out.append("\n\nWarnings:");
+                for (int i = 0; i < warnings.size() && i < 20; i++) out.append("\n- ").append(warnings.get(i));
+                if (warnings.size() > 20) out.append("\n- ... ").append(warnings.size() - 20).append(" more warning(s)");
+            }
+            if (!errors.isEmpty()) {
+                out.append("\n\nErrors:");
+                for (int i = 0; i < errors.size() && i < 20; i++) out.append("\n- ").append(errors.get(i));
+                if (errors.size() > 20) out.append("\n- ... ").append(errors.size() - 20).append(" more error(s)");
+            }
+            return out.toString();
         }
     }
 

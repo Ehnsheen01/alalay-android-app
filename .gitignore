@@ -31,6 +31,9 @@ captures/
 # Logs
 *.log
 
+# Real borrower/import data kept local only
+sample_import_data/
+
 # OS files
 .DS_Store
 Thumbs.db
