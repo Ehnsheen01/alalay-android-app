@@ -39,6 +39,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.security.SecureRandom;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.NumberFormat;
@@ -49,6 +50,12 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+
+import javax.crypto.Cipher;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
 
 public class MainActivity extends Activity {
     private static final int BLUE = 0xff000f96;
@@ -135,6 +142,9 @@ public class MainActivity extends Activity {
             currentUser = user;
             buildShell();
             showDashboard();
+            if ("admin".equalsIgnoreCase(text(username)) && "admin123".equals(text(password))) {
+                showChangePasswordDialog(true);
+            }
         });
         setContentView(root);
     }
@@ -251,9 +261,10 @@ public class MainActivity extends Activity {
         addAction("Commission Release", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
         addAction("Commission Release History", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
         addAction("Recalculate Commission", new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }});
-        addAction("Backup Data", new View.OnClickListener() { public void onClick(View v) { createAndShareBackup(false); }});
+        addAction("Backup Data", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
         addAction("Restore Data", new View.OnClickListener() { public void onClick(View v) { showRestoreDataDialog(); }});
         addAction("Export CSV", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
+        addAction("Change Password", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
         addSection("Testing Tools");
         addCard("Audit Logs Viewer", "Review local actions recorded by the app: client changes, loan releases, payments, voids, cancellations, and passbook prints.", (String) null, (View.OnClickListener) null);
         addCard("Database Integrity Checker", "Checks client balances, loan balances, paid loan balances, cancelled-loan safeguards, and voided-payment exclusion.", (String) null, (View.OnClickListener) null);
@@ -270,12 +281,53 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private void showBackupDataDialog() {
+        if (!requireAdmin()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Backup Data")
+                .setItems(new String[]{"Standard JSON Backup", "Encrypted JSON Backup"}, (d, which) -> {
+                    if (which == 0) showStandardBackupWarning();
+                    else showEncryptedBackupDialog();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showStandardBackupWarning() {
+        new AlertDialog.Builder(this)
+                .setTitle("Unencrypted Backup Warning")
+                .setMessage("This backup is not encrypted. Anyone with the file may read borrower and loan data.")
+                .setPositiveButton("Create Standard Backup", (d, w) -> createAndShareBackup(false))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showEncryptedBackupDialog() {
+        LinearLayout form = form();
+        final EditText pass = input("Backup password / passphrase");
+        final EditText confirm = input("Confirm passphrase");
+        pass.setInputType(0x00000081);
+        confirm.setInputType(0x00000081);
+        form.addView(pass);
+        form.addView(confirm);
+        new AlertDialog.Builder(this)
+                .setTitle("Encrypted Backup")
+                .setView(form)
+                .setPositiveButton("Create Encrypted Backup", (d, w) -> {
+                    if (text(pass).length() < 6) { toast("Backup password must be at least 6 characters."); return; }
+                    if (!text(pass).equals(text(confirm))) { toast("Backup passwords do not match."); return; }
+                    createAndShareEncryptedBackup(text(pass));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private void createAndShareBackup(boolean silent) {
         if (!silent && !requireAdmin()) return;
         try {
             File file = createBackupFile(silent ? "PreRestore" : "Backup");
             if (!silent) {
-                audit(db.getWritableDatabase(), "Backup created", "backup", file.getName(), "Created local JSON backup", currentUsername());
+                audit(db.getWritableDatabase(), "Standard unencrypted backup created", "backup", file.getName(), "Created local JSON backup", currentUsername());
                 shareFile(file, "application/json", "A&L Alalay Backup");
                 audit(db.getWritableDatabase(), "Backup shared", "backup", file.getName(), "Opened Android share sheet for backup", currentUsername());
             }
@@ -285,7 +337,28 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void createAndShareEncryptedBackup(String passphrase) {
+        if (!requireAdmin()) return;
+        try {
+            JSONObject plain = buildBackupJson();
+            File file = createEncryptedBackupFile(plain.toString(), passphrase);
+            audit(db.getWritableDatabase(), "Encrypted backup created", "backup", file.getName(), "Created encrypted .alalay backup", currentUsername());
+            shareFile(file, "application/octet-stream", "A&L Encrypted Backup");
+            audit(db.getWritableDatabase(), "Backup shared", "backup", file.getName(), "Opened Android share sheet for encrypted backup", currentUsername());
+        } catch (Exception ex) {
+            toast("Encrypted backup failed: " + ex.getMessage());
+            audit(db.getWritableDatabase(), "Backup failed", "backup", "encrypted", safe(ex.getMessage()), currentUsername());
+        }
+    }
+
     private File createBackupFile(String label) throws Exception {
+        JSONObject root = buildBackupJson();
+        File file = new File(backupDir(), "A&L_" + label + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".json");
+        writeText(file, root.toString(2));
+        return file;
+    }
+
+    private JSONObject buildBackupJson() throws Exception {
         JSONObject root = new JSONObject();
         JSONObject meta = new JSONObject();
         meta.put("app", "A&L Alalay Microlending Services");
@@ -300,9 +373,7 @@ public class MainActivity extends Activity {
             tables.put(table, tableToJson(r, table));
         }
         root.put("tables", tables);
-        File file = new File(backupDir(), "A&L_" + label + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".json");
-        writeText(file, root.toString(2));
-        return file;
+        return root;
     }
 
     private JSONArray tableToJson(SQLiteDatabase r, String table) throws Exception {
@@ -327,6 +398,58 @@ public class MainActivity extends Activity {
         return rows;
     }
 
+    private File createEncryptedBackupFile(String plainJson, String passphrase) throws Exception {
+        byte[] salt = randomBytes(16);
+        byte[] iv = randomBytes(12);
+        SecretKeySpec key = deriveBackupKey(passphrase, salt);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(128, iv));
+        byte[] encrypted = cipher.doFinal(plainJson.getBytes("UTF-8"));
+
+        JSONObject envelope = new JSONObject();
+        envelope.put("format", "alalay-encrypted-backup");
+        envelope.put("database_version", APP_DB_VERSION);
+        envelope.put("kdf", "PBKDF2WithHmacSHA256");
+        envelope.put("iterations", 120000);
+        envelope.put("cipher", "AES/GCM/NoPadding");
+        envelope.put("salt", android.util.Base64.encodeToString(salt, android.util.Base64.NO_WRAP));
+        envelope.put("iv", android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP));
+        envelope.put("ciphertext", android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP));
+
+        File file = new File(backupDir(), "A&L_EncryptedBackup_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".alalay");
+        writeText(file, envelope.toString(2));
+        return file;
+    }
+
+    private JSONObject decryptBackupEnvelope(JSONObject envelope, String passphrase) throws Exception {
+        if (!"alalay-encrypted-backup".equals(envelope.optString("format"))) throw new Exception("Not an encrypted A&L backup.");
+        if (envelope.optInt("database_version", -1) > APP_DB_VERSION) throw new Exception("Backup version is newer than this app.");
+        byte[] salt = android.util.Base64.decode(envelope.getString("salt"), android.util.Base64.NO_WRAP);
+        byte[] iv = android.util.Base64.decode(envelope.getString("iv"), android.util.Base64.NO_WRAP);
+        byte[] ciphertext = android.util.Base64.decode(envelope.getString("ciphertext"), android.util.Base64.NO_WRAP);
+        SecretKeySpec key = deriveBackupKey(passphrase, salt);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, iv));
+        try {
+            String plain = new String(cipher.doFinal(ciphertext), "UTF-8");
+            return new JSONObject(plain);
+        } catch (Exception ex) {
+            throw new Exception("Wrong password or corrupted encrypted backup.");
+        }
+    }
+
+    private SecretKeySpec deriveBackupKey(String passphrase, byte[] salt) throws Exception {
+        PBEKeySpec spec = new PBEKeySpec(passphrase.toCharArray(), salt, 120000, 256);
+        byte[] key = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+        return new SecretKeySpec(key, "AES");
+    }
+
+    private byte[] randomBytes(int count) {
+        byte[] out = new byte[count];
+        new SecureRandom().nextBytes(out);
+        return out;
+    }
+
     private void showRestoreDataDialog() {
         if (!requireAdmin()) return;
         new AlertDialog.Builder(this)
@@ -346,21 +469,53 @@ public class MainActivity extends Activity {
         if (!requireAdmin()) return;
         try {
             final String text = readUriText(uri);
-            final JSONObject backup = new JSONObject(text);
-            validateBackupJson(backup);
-            JSONObject meta = backup.getJSONObject("metadata");
-            new AlertDialog.Builder(this)
-                    .setTitle("Confirm Restore")
-                    .setMessage("Backup created: " + safe(meta.optString("created_at")) +
-                            "\nDatabase version: " + meta.optInt("database_version") +
-                            "\n\nThis will replace local data. A pre-restore backup will be created first.")
-                    .setPositiveButton("Restore Now", (d, w) -> restoreBackupJson(backup))
-                    .setNegativeButton("Cancel", null)
-                    .show();
+            final JSONObject parsed = new JSONObject(text);
+            if ("alalay-encrypted-backup".equals(parsed.optString("format"))) {
+                showEncryptedRestorePasswordDialog(parsed);
+            } else {
+                validateBackupJson(parsed);
+                showRestoreConfirmation(parsed, false);
+            }
         } catch (Exception ex) {
             toast("Invalid backup file: " + ex.getMessage());
             audit(db.getWritableDatabase(), "Restore failed", "backup", "validation", safe(ex.getMessage()), currentUsername());
         }
+    }
+
+    private void showEncryptedRestorePasswordDialog(final JSONObject envelope) {
+        LinearLayout form = form();
+        final EditText pass = input("Backup password / passphrase");
+        pass.setInputType(0x00000081);
+        form.addView(pass);
+        new AlertDialog.Builder(this)
+                .setTitle("Encrypted Backup Password")
+                .setView(form)
+                .setPositiveButton("Decrypt", (d, w) -> {
+                    try {
+                        JSONObject backup = decryptBackupEnvelope(envelope, text(pass));
+                        validateBackupJson(backup);
+                        audit(db.getWritableDatabase(), "Encrypted backup restore started", "backup", "encrypted", "Encrypted backup decrypted and validated", currentUsername());
+                        showRestoreConfirmation(backup, true);
+                    } catch (Exception ex) {
+                        toast(ex.getMessage());
+                        audit(db.getWritableDatabase(), "Encrypted backup restore failed", "backup", "encrypted", safe(ex.getMessage()), currentUsername());
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showRestoreConfirmation(final JSONObject backup, final boolean encrypted) throws Exception {
+        JSONObject meta = backup.getJSONObject("metadata");
+        new AlertDialog.Builder(this)
+                .setTitle("Confirm Restore")
+                .setMessage("Backup created: " + safe(meta.optString("created_at")) +
+                        "\nDatabase version: " + meta.optInt("database_version") +
+                        "\nEncrypted: " + (encrypted ? "Yes" : "No") +
+                        "\n\nThis will replace local data. A pre-restore backup will be created first.")
+                .setPositiveButton("Restore Now", (d, w) -> restoreBackupJson(backup, encrypted))
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void validateBackupJson(JSONObject backup) throws Exception {
@@ -377,11 +532,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void restoreBackupJson(JSONObject backup) {
+    private void restoreBackupJson(JSONObject backup, boolean encrypted) {
         String actor = currentUsername();
         try {
             File pre = createBackupFile("PreRestore");
-            audit(db.getWritableDatabase(), "Restore started", "backup", pre.getName(), "Pre-restore backup created", actor);
+            audit(db.getWritableDatabase(), encrypted ? "Encrypted backup restore started" : "Restore started", "backup", pre.getName(), "Pre-restore backup created", actor);
             SQLiteDatabase s = db.getWritableDatabase();
             s.beginTransaction();
             try {
@@ -396,8 +551,8 @@ public class MainActivity extends Activity {
                         s.insertOrThrow(table, null, jsonRowToValues(rows.getJSONObject(i)));
                     }
                 }
-                audit(s, "Restore started", "backup", pre.getName(), "Validated backup and imported tables", actor);
-                audit(s, "Restore completed", "backup", "JSON", "Restored backup and replaced local data", actor);
+                audit(s, encrypted ? "Encrypted backup restore started" : "Restore started", "backup", pre.getName(), "Validated backup and imported tables", actor);
+                audit(s, encrypted ? "Encrypted backup restore completed" : "Restore completed", "backup", encrypted ? "ALALAY" : "JSON", "Restored backup and replaced local data", actor);
                 s.setTransactionSuccessful();
             } finally {
                 s.endTransaction();
@@ -408,7 +563,7 @@ public class MainActivity extends Activity {
             showLoginScreen();
         } catch (Exception ex) {
             toast("Restore failed: " + ex.getMessage());
-            audit(db.getWritableDatabase(), "Restore failed", "backup", "JSON", safe(ex.getMessage()), actor);
+            audit(db.getWritableDatabase(), encrypted ? "Encrypted backup restore failed" : "Restore failed", "backup", encrypted ? "ALALAY" : "JSON", safe(ex.getMessage()), actor);
         }
     }
 
@@ -859,6 +1014,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Save", (d, w) -> {
                     if (blank(fullName) || blank(username) || blank(role)) { toast("Name, username, and role are required."); return; }
                     if (userId == null && blank(password)) { toast("Password is required for new users."); return; }
+                    if (!blank(password) && text(password).length() < 6) { toast("Password must be at least 6 characters."); return; }
                     String normalizedRole = normalizeRole(text(role));
                     if (normalizedRole.isEmpty()) { toast("Role must be Admin, Cashier, Collector, or Viewer."); return; }
                     if ("Collector".equals(normalizedRole) && canonicalCollector(text(collector)).isEmpty()) { toast("Collector role requires a picked collector name."); return; }
@@ -880,6 +1036,19 @@ public class MainActivity extends Activity {
                         }
                         audit(s, "Add user", "users", String.valueOf(inserted), "Added user " + text(username) + " as " + normalizedRole, currentUsername());
                     } else {
+                        if (!blank(password)) {
+                            new AlertDialog.Builder(this)
+                                    .setTitle("Confirm Password Reset")
+                                    .setMessage("Reset password for " + text(username) + "?\n\nTemporary password:\n" + text(password) + "\n\nShare this only with the user.")
+                                    .setPositiveButton("Confirm Reset", (cd, cw) -> {
+                                        s.update("users", v, "id=?", new String[]{String.valueOf(userId)});
+                                        audit(s, "Password reset by Admin", "users", String.valueOf(userId), "Admin reset password for " + text(username), currentUsername());
+                                        showUsers();
+                                    })
+                                    .setNegativeButton("Back", null)
+                                    .show();
+                            return;
+                        }
                         s.update("users", v, "id=?", new String[]{String.valueOf(userId)});
                         audit(s, "Edit user", "users", String.valueOf(userId), "Edited/reset user " + text(username), currentUsername());
                     }
@@ -887,6 +1056,39 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private void showChangePasswordDialog(boolean forced) {
+        if (currentUser == null) return;
+        LinearLayout form = form();
+        final EditText oldPassword = input("Old password");
+        final EditText newPassword = input("New password");
+        final EditText confirm = input("Confirm new password");
+        oldPassword.setInputType(0x00000081);
+        newPassword.setInputType(0x00000081);
+        confirm.setInputType(0x00000081);
+        form.addView(oldPassword);
+        form.addView(newPassword);
+        form.addView(confirm);
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(forced ? "Change Default Admin Password" : "Change Password")
+                .setMessage(forced ? "The default admin password is temporary. Please change it before continuing." : "")
+                .setView(form)
+                .setPositiveButton("Save Password", (d, w) -> {
+                    if (!passwordMatchesCurrentUser(text(oldPassword))) { toast("Old password is incorrect."); if (forced) showChangePasswordDialog(true); return; }
+                    if (text(newPassword).length() < 6) { toast("New password must be at least 6 characters."); if (forced) showChangePasswordDialog(true); return; }
+                    if (!text(newPassword).equals(text(confirm))) { toast("New passwords do not match."); if (forced) showChangePasswordDialog(true); return; }
+                    ContentValues v = new ContentValues();
+                    v.put("password_hash", hashPassword(text(newPassword)));
+                    v.put("updated_at", now());
+                    db.getWritableDatabase().update("users", v, "id=?", new String[]{String.valueOf(currentUser.id)});
+                    audit(db.getWritableDatabase(), "Password changed", "users", String.valueOf(currentUser.id), "User changed password", currentUsername());
+                    toast("Password changed.");
+                    showDashboard();
+                });
+        if (!forced) b.setNegativeButton("Cancel", null);
+        b.setCancelable(!forced);
+        b.show();
     }
 
     private void showClients() {
@@ -2770,6 +2972,12 @@ public class MainActivity extends Activity {
         } finally {
             c.close();
         }
+    }
+
+    private boolean passwordMatchesCurrentUser(String password) {
+        if (currentUser == null) return false;
+        return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM users WHERE id=? AND password_hash=?",
+                new String[]{String.valueOf(currentUser.id), hashPassword(safe(password))}) > 0;
     }
 
     private String hashPassword(String password) {
