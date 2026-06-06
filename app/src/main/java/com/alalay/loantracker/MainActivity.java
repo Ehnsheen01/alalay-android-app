@@ -193,13 +193,10 @@ public class MainActivity extends Activity {
         nav.setPadding(dp(8), dp(8), dp(8), dp(8));
         nav.setBackgroundColor(0xffffffff);
         nav.addView(navButton("Dashboard", new View.OnClickListener() { public void onClick(View v) { showDashboard(); }}));
-        nav.addView(navButton("Clients", new View.OnClickListener() { public void onClick(View v) { showClients(); }}));
-        nav.addView(navButton("Loans", new View.OnClickListener() { public void onClick(View v) { showLoans(); }}));
-        nav.addView(navButton("Collect", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }}));
-        nav.addView(navButton("Search", new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }}));
+        nav.addView(navButton("Menu", new View.OnClickListener() { public void onClick(View v) { showMainMenu(); }}));
+        if (canPostPayment()) nav.addView(navButton("Collect", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }}));
         nav.addView(navButton("Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }}));
-        nav.addView(navButton("Weekly Sheet", new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }}));
-        nav.addView(navButton("Passbook", new View.OnClickListener() { public void onClick(View v) { showPassbookPrompt(); }}));
+        nav.addView(navButton("Help", new View.OnClickListener() { public void onClick(View v) { showHelpGuide(); }}));
         nav.addView(navButton("Logout", new View.OnClickListener() { public void onClick(View v) { showLoginScreen(); }}));
         scroller.addView(nav);
         root.addView(scroller);
@@ -263,40 +260,74 @@ public class MainActivity extends Activity {
         addMetric("Fully Paid Loans", String.valueOf(fullyPaid));
         addMetric("Cancelled Loans", String.valueOf(cancelled));
         addMetric("Collection Rate", String.format(Locale.US, "%.1f%%", rate));
-        if (canAddClient()) addAction("Add Client", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
-        if (canReleaseLoan()) addAction("Release Loan", new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }});
-        if (isAdmin()) addAction("Add Sample Data", new View.OnClickListener() { public void onClick(View v) { seedSampleData(); showDashboard(); }});
-        if (isAdmin()) addAction("Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
-        addAction("Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
-        if (canViewCommissionReports()) addAction(isCollector() ? "My Commission" : "Commission Summary", new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }});
+        addSection("Quick Actions");
+        if (canAddClient()) addActionCard("Add Client", "Register a new borrower.", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
+        if (canReleaseLoan()) addActionCard("Release Loan", "Create a new loan and schedule.", new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }});
+        if (canPostPayment()) addActionCard("Post Payment", "Record a collection and receipt.", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }});
+        if (canViewPaymentHistory()) addActionCard("Payment History", "Find receipts and payment records.", new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }});
+        if (canPrintCollectionSheet()) addActionCard("Weekly Collection Sheet", "View and print due collections.", new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }});
+        if (canViewReports()) addActionCard("Reports", "Open collection, loan, and status reports.", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        if (canViewCommissionReports()) addActionCard(isCollector() ? "My Commission" : "Commission Summary", "Review commission balances and releases.", new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }});
+        if (isAdmin()) addActionCard("Admin Checks", "System checks, users, backups, imports, and cleanup.", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
         addSection("Due Today / Overdue");
         addScheduleList(scopedScheduleSql("s.status!='Paid' AND s.due_date<=? ORDER BY s.due_date LIMIT 20"),
                 appendScopedArgs(new String[]{ISO.format(new Date())}));
     }
 
+    private void showMainMenu() {
+        clear("Menu");
+        addSection("Daily Operations");
+        if (canPostPayment()) addActionCard("Post Payment", "Record a borrower payment.", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }});
+        if (canViewPaymentHistory()) addActionCard("Payment History", "Search by borrower or loan.", new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }});
+        addSection("Clients and Loans");
+        addActionCard("Clients", "View borrowers and assigned accounts.", new View.OnClickListener() { public void onClick(View v) { showClients(); }});
+        addActionCard("Loans", "View loan accounts and balances.", new View.OnClickListener() { public void onClick(View v) { showLoans(); }});
+        if (canAddClient()) addActionCard("Add Client", "Register a borrower.", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
+        if (canReleaseLoan()) addActionCard("Release Loan", "Create a loan account.", new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }});
+        addSection("Collections");
+        if (canPrintCollectionSheet()) addActionCard("Weekly Collection Sheet", "Due and overdue borrowers.", new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }});
+        if (canPrintPassbook()) addActionCard("Passbook", "Print assigned borrower passbooks.", new View.OnClickListener() { public void onClick(View v) { showPassbookPrompt(); }});
+        addSection("Reports");
+        if (canViewReports()) addActionCard("Reports", "Collection, overdue, loan, and status reports.", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addSection("Commission");
+        if (canViewCommissionReports()) addActionCard(isCollector() ? "My Commission" : "Commission Summary", "Commission balances and releases.", new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }});
+        if (isAdmin()) addActionCard("Commission Release", "Release collector commission.", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
+        addSection("Printing");
+        if (canPrintPassbook()) addActionCard("Print Passbook", "Borrower passbook PDF/print view.", new View.OnClickListener() { public void onClick(View v) { showPassbookPrompt(); }});
+        if (canPrintCollectionSheet()) addActionCard("Print Collection Sheet", "Collector collection sheet.", new View.OnClickListener() { public void onClick(View v) { showCollectionSheetPrintDialog(); }});
+        addSection("Backup and Import");
+        if (isAdmin()) addActionCard("Backup Data", "Create JSON or encrypted backup.", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
+        if (isAdmin()) addActionCard("Import Google Sheet CSV", "Import legacy sheet exports.", new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }});
+        addSection("Admin Tools");
+        if (isAdmin()) addActionCard("Admin Checks", "System, users, import validation, and cleanup.", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
+        addActionCard("Help / Quick Guide", "Workflow, backup, import, and printing guide.", new View.OnClickListener() { public void onClick(View v) { showHelpGuide(); }});
+    }
+
     private void showAdminChecks() {
         if (!requireAdmin()) return;
         clear("Admin Checks");
-        addAction("Audit Logs", new View.OnClickListener() { public void onClick(View v) { showAuditLogs(null); }});
-        addAction("Search Audit Logs", new View.OnClickListener() { public void onClick(View v) { showAuditSearchDialog(); }});
-        addAction("Run System Check", new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }});
-        addAction("Manage Users", new View.OnClickListener() { public void onClick(View v) { showUsers(); }});
-        addAction("Commission Settings", new View.OnClickListener() { public void onClick(View v) { showCommissionSettings(); }});
-        addAction("Commission Release", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
-        addAction("Commission Release History", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
-        addAction("Recalculate Commission", new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }});
-        addAction("Import Validation", new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }});
-        addAction("Recalculate Imported Balances", new View.OnClickListener() { public void onClick(View v) { showRecalculateImportedBalancesDialog(); }});
-        addAction("Collector Cleanup", new View.OnClickListener() { public void onClick(View v) { showCollectorCleanupTool(); }});
-        addAction("Backup Data", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
-        addAction("Restore Data", new View.OnClickListener() { public void onClick(View v) { showRestoreDataDialog(); }});
-        addAction("Export CSV", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
-        addAction("Import Google Sheet CSV", new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }});
-        addAction("Import Summary History", new View.OnClickListener() { public void onClick(View v) { showImportSummaryHistory(); }});
-        addAction("Change Password", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
-        addSection("Testing Tools");
-        addCard("Audit Logs Viewer", "Review local actions recorded by the app: client changes, loan releases, payments, voids, cancellations, and passbook prints.", (String) null, (View.OnClickListener) null);
-        addCard("Database Integrity Checker", "Checks client balances, loan balances, paid loan balances, cancelled-loan safeguards, and voided-payment exclusion.", (String) null, (View.OnClickListener) null);
+        addSection("System");
+        addActionCard("System Check", "Run database and lending integrity checks.", new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }});
+        addActionCard("Audit Logs", "Review sensitive local actions.", new View.OnClickListener() { public void onClick(View v) { showAuditLogs(null); }});
+        addActionCard("Search Audit Logs", "Filter audit entries by action.", new View.OnClickListener() { public void onClick(View v) { showAuditSearchDialog(); }});
+        addSection("Data Safety");
+        addActionCard("Backup Data", "Create standard or encrypted backups.", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
+        addActionCard("Restore Data", "Restore from a validated backup.", new View.OnClickListener() { public void onClick(View v) { showRestoreDataDialog(); }});
+        addActionCard("Export CSV", "Export local tables and reports.", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
+        addSection("Import Tools");
+        addActionCard("Import Google Sheet CSV", "Import old tracker CSV files.", new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }});
+        addActionCard("Import Validation", "Check imported links, amounts, statuses, and collectors.", new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }});
+        addActionCard("Collector Cleanup", "Map non-canonical collector names.", new View.OnClickListener() { public void onClick(View v) { showCollectorCleanupTool(); }});
+        addActionCard("Recalculate Imported Balances", "Reconcile loans, clients, schedules, and commission.", new View.OnClickListener() { public void onClick(View v) { showRecalculateImportedBalancesDialog(); }});
+        addActionCard("Import Summary History", "View recent import audit entries.", new View.OnClickListener() { public void onClick(View v) { showImportSummaryHistory(); }});
+        addSection("Users and Security");
+        addActionCard("Manage Users", "Create users and role access.", new View.OnClickListener() { public void onClick(View v) { showUsers(); }});
+        addActionCard("Change Password", "Update your login password.", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
+        addSection("Commission Settings");
+        addActionCard("Commission Settings", "Collector commission rates.", new View.OnClickListener() { public void onClick(View v) { showCommissionSettings(); }});
+        addActionCard("Commission Release", "Release available commission.", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
+        addActionCard("Commission Release History", "Review released commission.", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
+        addActionCard("Recalculate Commission", "Rebuild commission from fully-paid loans.", new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }});
     }
 
     private void showAuditSearchDialog() {
@@ -603,6 +634,38 @@ public class MainActivity extends Activity {
                 .setItems(GOOGLE_IMPORT_TYPES, (d, which) -> pickGoogleCsv(GOOGLE_IMPORT_TYPES[which]))
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private void showHelpGuide() {
+        clear("Help / Quick Guide");
+        addAction("Back to Menu", new View.OnClickListener() { public void onClick(View v) { showMainMenu(); }});
+        addCard("Recommended Workflow",
+                "1. Create an encrypted backup before major changes.\n2. Add or verify clients.\n3. Release loans and review schedules.\n4. Post payments only to active loans.\n5. Run reports and print receipts/passbooks when needed.\n6. Run System Check after imports or cleanup.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Import Order",
+                "Import Clients first, then Loans, then Payment Schedule, then Repayments, then Collector Commission Rates. Import Dashboard Reference last to compare totals.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Backup Reminder",
+                "Use Admin Checks > Backup Data > Encrypted JSON Backup before importing, restoring, or cleaning real data.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Payment Posting",
+                "Use Post Payment, pick the borrower/loan, confirm amount and method, then print or save the receipt from Android's print dialog.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Void / Cancel Rules",
+                "Voided payments stay in history but no longer count as valid collection. Cancelled loans keep records and should not accept new payments.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Commission Rule",
+                "Commission is based on loan principal times collector rate, earned only when a loan becomes fully paid, and reversed if voiding makes the loan unpaid.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Collector Restrictions",
+                "Collector users see assigned borrowers and loans only. Their reports, passbooks, collection sheets, and commission views are scoped to their collector name.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Print / Save as PDF",
+                "Open a receipt, passbook, collection sheet, loan release form, or report, then choose Print. Use Android's Save as PDF option when available.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Encrypted Backup",
+                "Choose Backup Data, select Encrypted JSON Backup, enter a passphrase, and store the generated file safely.",
+                (String) null, (View.OnClickListener) null);
     }
 
     private void pickGoogleCsv(String type) {
@@ -1913,8 +1976,8 @@ public class MainActivity extends Activity {
                 }
                 addCard(c.getString(1) + "  [" + id + "]",
                         "Phone: " + safe(c.getString(2)) + "\nAddress: " + safe(c.getString(3)) +
-                                "\nStatus: " + c.getString(4) + " | Active loans: " + c.getInt(5) +
-                                "\nOutstanding: " + peso(c.getDouble(6)) + "\nCollector: " + safe(c.getString(7)),
+                                "\n" + statusLine(c.getString(4)) + "\nActive loans: " + c.getInt(5) +
+                                "\nBalance / Outstanding: " + peso(c.getDouble(6)) + "\nCollector: " + safe(c.getString(7)),
                         labels.toArray(new String[0]), listeners.toArray(new View.OnClickListener[0]));
             } while (c.moveToNext());
         } finally {
@@ -1957,10 +2020,11 @@ public class MainActivity extends Activity {
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showCancelLoanDialog(loanId); }});
                 }
                 addCard(loanId + " - " + c.getString(1),
-                        "Released: " + c.getString(2) + "\nPrincipal: " + peso(c.getDouble(3)) +
+                        "Borrower: " + c.getString(1) + "\nLoan Account: " + loanId +
+                                "\nReleased: " + c.getString(2) + "\nPrincipal: " + peso(c.getDouble(3)) +
                                 " | Weekly due: " + peso(c.getDouble(4)) + "\nTotal due: " + peso(c.getDouble(5)) +
-                                " | Balance: " + peso(c.getDouble(6)) + "\nStatus: " + c.getString(7) +
-                                " | Next due: " + safe(c.getString(8)) + "\nCollector: " + safe(c.getString(9)) +
+                                "\nBalance: " + peso(c.getDouble(6)) + "\n" + statusLine(c.getString(7)) +
+                                "\nNext due: " + safe(c.getString(8)) + "\nCollector: " + safe(c.getString(9)) +
                                 "\nTerms: " + safe(c.getString(10)),
                         labels.toArray(new String[0]), listeners.toArray(new View.OnClickListener[0]));
             } while (c.moveToNext());
@@ -2880,9 +2944,12 @@ public class MainActivity extends Activity {
             }
             do {
                 double due = Math.max(0, c.getDouble(4) - c.getDouble(5));
+                String status = due <= 0.009 ? "Paid" : (dateBefore(c.getString(3), ISO.format(new Date())) ? "Overdue" : "Due Soon");
                 addCard(c.getString(1) + " - " + c.getString(0),
-                        "Schedule: " + c.getInt(2) + "\nDue date: " + c.getString(3) +
-                                "\nAmount due: " + peso(due) + "\nLoan balance: " + peso(c.getDouble(6)),
+                        "Borrower: " + c.getString(1) + "\nLoan Account: " + c.getString(0) +
+                                "\nSchedule: " + c.getInt(2) + "\nDue date: " + c.getString(3) +
+                                "\nAmount due: " + peso(due) + "\nLoan balance: " + peso(c.getDouble(6)) +
+                                "\n" + statusLine(status),
                         (String) null, (View.OnClickListener) null);
             } while (c.moveToNext());
         } finally {
@@ -3240,7 +3307,7 @@ public class MainActivity extends Activity {
             addEmpty("Loan not found.");
             return;
         }
-        addCard(lr.id + " - " + lr.clientName, "Balance: " + peso(lr.balance) + "\nStatus: " + lr.status, (String) null, (View.OnClickListener) null);
+        addCard(lr.id + " - " + lr.clientName, "Loan Account: " + lr.id + "\nBorrower: " + lr.clientName + "\nBalance: " + peso(lr.balance) + "\n" + statusLine(lr.status), (String) null, (View.OnClickListener) null);
         showPaymentRows("SELECT payment_id,receipt_number,payment_date,amount,method,posted_by,remarks,voided,void_reason FROM repayments WHERE loan_id=? ORDER BY payment_date DESC, encoded_at DESC",
                 new String[]{loanId});
     }
@@ -3266,7 +3333,7 @@ public class MainActivity extends Activity {
                 String body = "Receipt: " + safe(c.getString(1)) + "\nDate: " + safe(c.getString(2)) +
                         "\nAmount: " + peso(c.getDouble(3)) + "\nMethod: " + safe(c.getString(4)) +
                         "\nPosted by: " + safe(c.getString(5)) + "\nRemarks: " + safe(c.getString(6)) +
-                        "\nStatus: " + (voided ? "VOID - " + safe(c.getString(8)) : "Active");
+                        "\n" + statusLine(voided ? "Voided - " + safe(c.getString(8)) : "Active");
                 ArrayList<String> labels = new ArrayList<>();
                 ArrayList<View.OnClickListener> listeners = new ArrayList<>();
                 if (canPrintReceipt(paymentId)) {
@@ -4401,6 +4468,10 @@ public class MainActivity extends Activity {
         content.addView(b, lp);
     }
 
+    private void addActionCard(String title, String body, View.OnClickListener listener) {
+        addCard(title, body, "Open", listener);
+    }
+
     private void addCard(String title, String body, String action, View.OnClickListener listener) {
         addCard(title, body, action == null ? null : new String[]{action}, listener == null ? null : new View.OnClickListener[]{listener});
     }
@@ -4409,7 +4480,7 @@ public class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(12), dp(10), dp(12), dp(10));
-        card.setBackgroundColor(0xffffffff);
+        card.setBackgroundColor(statusColor(title + "\n" + body));
         TextView t = new TextView(this);
         t.setText(title);
         t.setTextColor(INK);
@@ -4431,6 +4502,9 @@ public class MainActivity extends Activity {
             button.setTextColor(0xffffffff);
             button.setBackgroundColor(BLUE);
                 button.setOnClickListener(listeners[i]);
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, dp(44));
+                blp.setMargins(0, dp(8), 0, 0);
+                button.setLayoutParams(blp);
             card.addView(button);
             }
         }
@@ -4441,7 +4515,7 @@ public class MainActivity extends Activity {
 
     private void addEmpty(String msg) {
         TextView e = new TextView(this);
-        e.setText(msg);
+        e.setText(friendlyEmpty(msg));
         e.setTextColor(MUTED);
         e.setGravity(Gravity.CENTER);
         e.setPadding(dp(12), dp(24), dp(12), dp(24));
@@ -4460,6 +4534,8 @@ public class MainActivity extends Activity {
         EditText e = new EditText(this);
         e.setHint(hint);
         e.setSingleLine(false);
+        e.setTextSize(15);
+        e.setPadding(dp(10), dp(8), dp(10), dp(8));
         return e;
     }
 
@@ -4473,6 +4549,33 @@ public class MainActivity extends Activity {
         EditText e = input(hint);
         e.setInputType(InputType.TYPE_CLASS_NUMBER);
         return e;
+    }
+
+    private int statusColor(String text) {
+        String s = safe(text).toLowerCase(Locale.US);
+        if (s.contains("cancelled") || s.contains("voided") || s.contains("void -")) return 0xfffff1f2;
+        if (s.contains("overdue")) return 0xfffff7ed;
+        if (s.contains("due soon")) return 0xfffffbeb;
+        if (s.contains("paid") || s.contains("fully paid")) return 0xffecfdf5;
+        if (s.contains("active") || s.contains("current") || s.contains("valid")) return 0xffeff6ff;
+        return 0xffffffff;
+    }
+
+    private String statusLine(String status) {
+        String s = safe(status);
+        if (s.isEmpty()) return "Status: Not set";
+        return "Status: " + s.toUpperCase(Locale.US);
+    }
+
+    private String friendlyEmpty(String msg) {
+        String s = safe(msg);
+        String lower = s.toLowerCase(Locale.US);
+        if (lower.contains("no clients")) return "No clients yet. Add a client to begin tracking borrowers.";
+        if (lower.contains("no loans")) return "No loans found. Try clearing search or release a new loan.";
+        if (lower.contains("payment history") || lower.contains("no payments")) return "No payments yet for this borrower or loan.";
+        if (lower.contains("overdue")) return "No overdue accounts. Nice and tidy.";
+        if (lower.contains("commission")) return "No commission available yet.";
+        return s;
     }
 
     private boolean blank(EditText e) { return text(e).trim().isEmpty(); }
