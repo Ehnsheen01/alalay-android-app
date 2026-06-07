@@ -11,6 +11,8 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -21,6 +23,7 @@ import android.print.PrintManager;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebView;
@@ -40,6 +43,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -99,14 +103,6 @@ public class MainActivity extends Activity {
     private static final String NAV_MENU_KEY = "menu";
     private static final String NAV_PROFILE_KEY = "profile";
     private static final String NAV_HELP_KEY = "help";
-    private static final String NAV_HOME_KEY = "home";
-    private static final String NAV_CLIENTS_KEY = "clients";
-    private static final String NAV_LOANS_KEY = "loans";
-    private static final String NAV_COLLECT_KEY = "collect";
-    private static final String NAV_REPORTS_KEY = "reports";
-    private static final String NAV_MENU_KEY = "menu";
-    private static final String NAV_PROFILE_KEY = "profile";
-    private static final String NAV_HELP_KEY = "help";
     private static final int REQ_RESTORE_JSON = 501;
     private static final int REQ_IMPORT_CSV = 502;
     private static final int REQ_ATTACH_CLIENT_PHOTO = 503;
@@ -131,9 +127,7 @@ public class MainActivity extends Activity {
     private final Map<String, Button> topNavButtons = new HashMap<>();
     private final Map<String, Button> bottomNavButtons = new HashMap<>();
     private String activeNavKey = NAV_HOME_KEY;
-    private final Map<String, Button> topNavButtons = new HashMap<>();
-    private final Map<String, Button> bottomNavButtons = new HashMap<>();
-    private String activeNavKey = NAV_HOME_KEY;
+    private String cachedLogoDataUri = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -456,14 +450,8 @@ public class MainActivity extends Activity {
         wrap.setGravity(Gravity.CENTER_VERTICAL);
         wrap.setPadding(0, 0, 0, 0);
 
-        TextView mark = new TextView(this);
-        mark.setText("A&L");
-        mark.setGravity(Gravity.CENTER);
-        mark.setTextColor(dark ? NAVY : 0xffffffff);
-        mark.setTextSize(compact ? 16 : 22);
-        mark.setTypeface(Typeface.DEFAULT_BOLD);
-        mark.setBackground(roundedBg(dark ? GOLD : NAVY, dark ? 0x55ffffff : GOLD, compact ? 14 : 18));
-        wrap.addView(mark, new LinearLayout.LayoutParams(compact ? dp(48) : dp(68), compact ? dp(48) : dp(68)));
+        View logo = officialLogoView(dark, compact);
+        wrap.addView(logo, new LinearLayout.LayoutParams(compact ? dp(52) : dp(82), compact ? dp(52) : dp(82)));
 
         LinearLayout word = new LinearLayout(this);
         word.setOrientation(LinearLayout.VERTICAL);
@@ -493,6 +481,29 @@ public class MainActivity extends Activity {
             wrap.addView(role);
         }
         return wrap;
+    }
+
+    private View officialLogoView(boolean dark, boolean compact) {
+        try {
+            ImageView image = new ImageView(this);
+            int logoId = getResources().getIdentifier("alalay_logo", "drawable", getPackageName());
+            if (logoId == 0) throw new Exception("Logo asset missing.");
+            image.setImageResource(logoId);
+            image.setAdjustViewBounds(true);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            image.setPadding(dp(3), dp(3), dp(3), dp(3));
+            image.setBackground(roundedBg(dark ? 0xffffffff : 0xfff8fbff, dark ? 0x55ffffff : LINE, compact ? 14 : 18));
+            return image;
+        } catch (Exception ignored) {
+            TextView mark = new TextView(this);
+            mark.setText("A&L");
+            mark.setGravity(Gravity.CENTER);
+            mark.setTextColor(dark ? NAVY : 0xffffffff);
+            mark.setTextSize(compact ? 16 : 22);
+            mark.setTypeface(Typeface.DEFAULT_BOLD);
+            mark.setBackground(roundedBg(dark ? GOLD : NAVY, dark ? 0x55ffffff : GOLD, compact ? 14 : 18));
+            return mark;
+        }
     }
 
     private void clear(String heading) {
@@ -2615,6 +2626,7 @@ public class MainActivity extends Activity {
     }
 
     private void printLatestPassbookForClient(String clientId) {
+        if (isViewer()) setActiveNav(NAV_LOANS_KEY);
         toast("Opening print preview...");
         if (safe(clientId).isEmpty()) { toast("Passbook not available. No borrower profile linked."); return; }
         String loanId = latestLoanIdForClient(clientId);
@@ -2623,6 +2635,7 @@ public class MainActivity extends Activity {
     }
 
     private void printLatestLoanFormForClient(String clientId) {
+        if (isViewer()) setActiveNav(NAV_LOANS_KEY);
         toast("Opening print preview...");
         if (safe(clientId).isEmpty()) { toast("Loan not found."); return; }
         String loanId = latestLoanIdForClient(clientId);
@@ -2631,12 +2644,14 @@ public class MainActivity extends Activity {
     }
 
     private void showLatestLoanDetailsForClient(String clientId) {
+        if (isViewer()) setActiveNav(NAV_LOANS_KEY);
         String loanId = latestLoanIdForClient(clientId);
         if (loanId.isEmpty()) { toast("No loan found for this borrower."); return; }
         showLoanDetails(loanId);
     }
 
     private void showLatestScheduleForClient(String clientId) {
+        if (isViewer()) setActiveNav(NAV_COLLECT_KEY);
         String loanId = latestLoanIdForClient(clientId);
         if (loanId.isEmpty()) { toast("No loan found for this borrower."); return; }
         showRepaymentSchedule(loanId);
@@ -6499,16 +6514,41 @@ public class MainActivity extends Activity {
         return "<div class='signatures'><div><span></span><p>" + h(left) + "</p></div><div><span></span><p>" + h(right) + "</p></div></div>";
     }
     private String reportHeader(String title, String subtitle) {
-        return "<div class='brand'><div class='mark'>A&L</div><div><b>A&L Alalay</b><br><span>Microlending Services</span></div></div>" +
-                "<div class='meta'>Printed: " + h(now()) + "<br>Printed by: " + h(currentUsername()) + "</div><h1>" + h(title) + "</h1><p>" + h(subtitle) + "</p>";
+        return "<div class='meta'>Printed: " + h(now()) + "<br>Printed by: " + h(currentUsername()) + "</div><h1>" + h(title) + "</h1><p>" + h(subtitle) + "</p>";
     }
     private String htmlPage(String title, String body) {
         return "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>" +
-                "body{font-family:sans-serif;color:#0b1220;margin:24px}h1{color:#071b3a;font-size:24px;margin:8px 0 12px}h2{color:#123c7c;font-size:17px;margin-top:18px}.meta{font-size:13px;margin-bottom:10px;color:#64748b}.brand{display:flex;align-items:center;gap:10px;margin-bottom:12px;color:#071b3a}.brand .mark{background:#071b3a;color:white;border-bottom:4px solid #d9a441;border-radius:12px;padding:10px 12px;font-weight:bold}.brand span{color:#64748b;font-size:12px}" +
+                "body{font-family:sans-serif;color:#0b1220;margin:24px}h1{color:#071b3a;font-size:24px;margin:8px 0 12px}h2{color:#123c7c;font-size:17px;margin-top:18px}.meta{font-size:13px;margin-bottom:10px;color:#64748b}.brand{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:10px;border-bottom:3px solid #d9a441;color:#071b3a}.brand img{width:56px;height:56px;object-fit:contain}.brand .mark{background:#071b3a;color:white;border-bottom:4px solid #d9a441;border-radius:12px;padding:10px 12px;font-weight:bold}.brand span{color:#64748b;font-size:12px}" +
                 "table{width:100%;border-collapse:collapse;margin:10px 0 16px}td,th{border:1px solid #d7e0ec;padding:6px;font-size:12px;vertical-align:top}th{background:#071b3a;color:white;text-align:left}.meta-table th{width:34%;background:#e8f2ff;color:#071b3a}.meta-table td{background:white;color:#0b1220}" +
                 ".signatures{display:flex;gap:48px;margin-top:42px}.signatures div{flex:1;text-align:center}.signatures span{display:block;border-top:1px solid #0f172a;height:1px}.signatures p{font-size:12px;margin-top:8px}.boxes{display:flex;gap:16px;margin:12px 0 20px}.boxes div{height:96px;flex:1;border:1px dashed #64748b;text-align:center;padding-top:38px;color:#64748b}" +
                 "@media print{body{margin:12px}.no-print{display:none}}" +
-                "</style></head><body>" + body + "</body></html>";
+                "</style></head><body>" + printBrandHeader(title) + body + "</body></html>";
+    }
+
+    private String printBrandHeader(String title) {
+        String logo = logoDataUri();
+        String mark = logo.isEmpty() ? "<div class='mark'>A&L</div>" : "<img src='" + logo + "'/>";
+        return "<div class='brand'>" + mark + "<div><b>A&L Alalay Microlending Services</b><br><span>" +
+                h(title) + " | Generated " + h(now()) + "</span></div></div>";
+    }
+
+    private String logoDataUri() {
+        if (!cachedLogoDataUri.isEmpty()) return cachedLogoDataUri;
+        try {
+            int logoId = getResources().getIdentifier("alalay_logo", "drawable", getPackageName());
+            if (logoId == 0) return "";
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            Bitmap original = BitmapFactory.decodeResource(getResources(), logoId);
+            if (original == null) return "";
+            int width = Math.min(320, original.getWidth());
+            int height = Math.max(1, (int) (original.getHeight() * (width / (double) original.getWidth())));
+            Bitmap scaled = Bitmap.createScaledBitmap(original, width, height, true);
+            scaled.compress(Bitmap.CompressFormat.PNG, 100, out);
+            cachedLogoDataUri = "data:image/png;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+            return cachedLogoDataUri;
+        } catch (Exception ignored) {
+            return "";
+        }
     }
     private void printHtml(final String jobName, final String html, String auditAction, String entityType, String entityId, String details) {
         if (safe(html).trim().isEmpty()) {
@@ -6527,6 +6567,7 @@ public class MainActivity extends Activity {
         printablePreviewOpen = true;
         clear("Printable Preview");
         addBack("Back", new View.OnClickListener() { public void onClick(View v) { returnFromPrintablePreview(); }});
+        content.addView(brandLogoView(false, true));
         addCard("A&L Alalay Print Preview", "Review the form, receipt, report, or passbook below before printing or saving as PDF.", (String) null, null);
         final boolean[] loaded = new boolean[]{false};
         final WebView preview = new WebView(this);
