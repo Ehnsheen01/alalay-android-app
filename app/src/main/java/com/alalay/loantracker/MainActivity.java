@@ -11,13 +11,16 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.StrictMode;
 import android.print.PrintAttributes;
 import android.print.PrintManager;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebView;
@@ -62,9 +65,15 @@ import javax.crypto.spec.SecretKeySpec;
 public class MainActivity extends Activity {
     private static final int BLUE = 0xff000f96;
     private static final int ORANGE = 0xfff15a24;
+    private static final int NAVY = 0xff0b1f4d;
+    private static final int GREEN = 0xff16a34a;
+    private static final int AMBER = 0xfff59e0b;
+    private static final int RED = 0xffdc2626;
     private static final int INK = 0xff0f172a;
     private static final int MUTED = 0xff64748b;
     private static final int LINE = 0xffdbe3ef;
+    private static final int APP_BG = 0xfff4f7fb;
+    private static final int CARD_BG = 0xffffffff;
     private static final Locale PH = new Locale("en", "PH");
     private static final SimpleDateFormat ISO = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
     private static final String[] COLLECTOR_NAMES = new String[]{"LEO PELIN", "SHEGFRED CABANA", "RASHIEM MORATA", "EHVAN PABUAYA"};
@@ -124,7 +133,7 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(24), dp(36), dp(24), dp(24));
-        root.setBackgroundColor(0xfff8fafc);
+        root.setBackgroundColor(APP_BG);
 
         TextView title = new TextView(this);
         title.setText("A&L Alalay Loan Tracker");
@@ -149,9 +158,7 @@ public class MainActivity extends Activity {
 
         Button login = new Button(this);
         login.setText("Login");
-        login.setAllCaps(false);
-        login.setTextColor(0xffffffff);
-        login.setBackgroundColor(BLUE);
+        styleButton(login, NAVY);
         root.addView(login, new LinearLayout.LayoutParams(-1, dp(48)));
         login.setOnClickListener(v -> {
             if (!databaseReady) {
@@ -176,28 +183,30 @@ public class MainActivity extends Activity {
     private void buildShell() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xfff8fafc);
+        root.setBackgroundColor(APP_BG);
 
         TextView title = new TextView(this);
-        title.setText("A&L Alalay Loan Tracker");
+        title.setText("A&L Alalay");
         title.setTextColor(0xffffffff);
         title.setTextSize(20);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setPadding(dp(16), dp(14), dp(16), dp(10));
-        title.setBackgroundColor(BLUE);
+        title.setBackgroundColor(NAVY);
         root.addView(title);
 
         HorizontalScrollView scroller = new HorizontalScrollView(this);
         scroller.setHorizontalScrollBarEnabled(false);
         LinearLayout nav = new LinearLayout(this);
         nav.setPadding(dp(8), dp(8), dp(8), dp(8));
-        nav.setBackgroundColor(0xffffffff);
-        nav.addView(navButton("Dashboard", new View.OnClickListener() { public void onClick(View v) { showDashboard(); }}));
-        nav.addView(navButton("Menu", new View.OnClickListener() { public void onClick(View v) { showMainMenu(); }}));
-        if (canPostPayment()) nav.addView(navButton("Collect", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }}));
-        nav.addView(navButton("Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }}));
-        nav.addView(navButton("Help", new View.OnClickListener() { public void onClick(View v) { showHelpGuide(); }}));
-        nav.addView(navButton("Logout", new View.OnClickListener() { public void onClick(View v) { showLoginScreen(); }}));
+        nav.setBackgroundColor(CARD_BG);
+        nav.addView(navButton("⌂ Home", new View.OnClickListener() { public void onClick(View v) { showDashboard(); }}));
+        nav.addView(navButton("👥 Clients", new View.OnClickListener() { public void onClick(View v) { showClients(); }}));
+        nav.addView(navButton("▤ Loans", new View.OnClickListener() { public void onClick(View v) { showLoans(); }}));
+        if (canPostPayment()) nav.addView(navButton("₱ Collect", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }}));
+        nav.addView(navButton("▥ Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }}));
+        nav.addView(navButton("☰ Menu", new View.OnClickListener() { public void onClick(View v) { showMainMenu(); }}));
+        nav.addView(navButton("? Help", new View.OnClickListener() { public void onClick(View v) { showHelpGuide(); }}));
+        nav.addView(navButton("⇥ Logout", new View.OnClickListener() { public void onClick(View v) { showLoginScreen(); }}));
         scroller.addView(nav);
         root.addView(scroller);
 
@@ -213,12 +222,10 @@ public class MainActivity extends Activity {
     private Button navButton(String text, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextColor(0xffffffff);
         b.setTextSize(13);
-        b.setAllCaps(false);
-        b.setBackgroundColor(BLUE);
+        styleButton(b, NAVY);
         b.setOnClickListener(listener);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(42));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(38));
         lp.setMargins(dp(4), 0, dp(4), 0);
         b.setLayoutParams(lp);
         return b;
@@ -236,98 +243,172 @@ public class MainActivity extends Activity {
     }
 
     private void showDashboard() {
-        clear("Dashboard");
-        addMetric("Logged In", currentUser.fullName + "\n" + currentUser.role + ("Collector".equals(currentUser.role) && !safe(currentUser.collectorName).isEmpty() ? " - " + currentUser.collectorName : ""));
+        clear("A&L Alalay");
         SQLiteDatabase r = db.getReadableDatabase();
         int clients = scalarInt(r, scopedClientCountSql(), scopedArgs());
         int activeLoans = scalarInt(r, scopedLoanCountSql("status='Active'"), scopedArgs());
+        int cancelled = scalarInt(r, scopedLoanCountSql("status='Cancelled'"), scopedArgs());
         double released = scalarDouble(r, scopedLoanSumSql("principal", "status!='Cancelled'"), scopedArgs());
         double outstanding = scalarDouble(r, scopedLoanSumSql("balance", "status='Active'"), scopedArgs());
-        double collected = scalarDouble(r, scopedPaymentSumSql(), scopedArgs());
+        String monthStart = new SimpleDateFormat("yyyy-MM-01", Locale.US).format(new Date());
+        String monthEnd = new SimpleDateFormat("yyyy-MM-31", Locale.US).format(new Date());
+        double collected = scalarDouble(r, isCollector()
+                ? "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND r.payment_date BETWEEN ? AND ? AND UPPER(COALESCE(l.collector,''))=UPPER(?)"
+                : "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE voided=0 AND payment_date BETWEEN ? AND ?",
+                isCollector() ? new String[]{monthStart, monthEnd, safe(currentUser.collectorName)} : new String[]{monthStart, monthEnd});
         double dueToday = scalarDouble(r, scopedScheduleSumSql("MAX(0,s.scheduled_amount-s.paid_to_date)", "s.status!='Paid' AND s.due_date=?"), appendScopedArgs(new String[]{ISO.format(new Date())}));
         double overdue = scalarDouble(r, scopedScheduleSumSql("MAX(0,s.scheduled_amount-s.paid_to_date)", "s.status!='Paid' AND s.due_date<?"), appendScopedArgs(new String[]{ISO.format(new Date())}));
+        int dueTodayCount = scalarInt(r, isCollector()
+                ? "SELECT COUNT(DISTINCT l.loan_id) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.status!='Paid' AND s.due_date=? AND UPPER(COALESCE(l.collector,''))=UPPER(?)"
+                : "SELECT COUNT(DISTINCT loan_id) FROM schedule WHERE status!='Paid' AND due_date=?",
+                isCollector() ? new String[]{ISO.format(new Date()), safe(currentUser.collectorName)} : new String[]{ISO.format(new Date())});
+        int overdueCount = scalarInt(r, isCollector()
+                ? "SELECT COUNT(DISTINCT l.loan_id) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.status!='Paid' AND s.due_date<? AND UPPER(COALESCE(l.collector,''))=UPPER(?)"
+                : "SELECT COUNT(DISTINCT loan_id) FROM schedule WHERE status!='Paid' AND due_date<?",
+                isCollector() ? new String[]{ISO.format(new Date()), safe(currentUser.collectorName)} : new String[]{ISO.format(new Date())});
         int fullyPaid = scalarInt(r, scopedLoanCountSql("status='Paid'"), scopedArgs());
-        int cancelled = scalarInt(r, scopedLoanCountSql("status='Cancelled'"), scopedArgs());
         double expected = scalarDouble(r, scopedScheduleSumSql("s.scheduled_amount", "s.due_date<=?"), appendScopedArgs(new String[]{ISO.format(new Date())}));
-        double rate = expected > 0 ? (collected / expected) * 100.0 : 0;
-        addMetric("Clients", String.valueOf(clients));
-        addMetric("Active Loans", String.valueOf(activeLoans));
-        addMetric("Principal Released", peso(released));
-        addMetric("Collected", peso(collected));
-        addMetric("Outstanding", peso(outstanding));
-        addMetric("Due Today", peso(dueToday));
-        addMetric("Overdue Amount", peso(overdue));
-        addMetric("Fully Paid Loans", String.valueOf(fullyPaid));
-        addMetric("Cancelled Loans", String.valueOf(cancelled));
-        addMetric("Collection Rate", String.format(Locale.US, "%.1f%%", rate));
+        double totalCollected = scalarDouble(r, scopedPaymentSumSql(), scopedArgs());
+        double rate = expected > 0 ? (totalCollected / expected) * 100.0 : 0;
+        addDashboardHeader(backupStatusText());
+        addPortfolioCard(outstanding, collected, activeLoans, rate);
+        addSection("Portfolio Snapshot");
+        addKpiGrid(
+                new String[]{"👥", "₱", "⏱", "⚠", "✓", "×"},
+                new String[]{String.valueOf(clients), peso(released), peso(dueToday), peso(overdue), String.valueOf(fullyPaid), String.valueOf(cancelled)},
+                new String[]{"Total Clients", "Principal Released", "Due Today", "Overdue", "Fully Paid", "Cancelled"},
+                new String[]{"Borrowers", "Released loans", dueTodayCount + " account(s)", overdueCount + " account(s)", "Completed", "Closed"},
+                new String[]{"Current", "Active", dueTodayCount > 0 ? "Due Today" : "Current", overdueCount > 0 ? "Overdue" : "Current", "Paid", cancelled > 0 ? "Cancelled" : "Current"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showClients(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Loan Release", "range", true, false, true); }},
+                        new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Overdue", "today", true, false, false); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Fully Paid Loans", "range", true, false, false); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Cancelled / Voided", "range", true, false, false); }}
+                });
         addSection("Quick Actions");
-        if (canAddClient()) addActionCard("Add Client", "Register a new borrower.", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
-        if (canReleaseLoan()) addActionCard("Release Loan", "Create a new loan and schedule.", new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }});
-        if (canPostPayment()) addActionCard("Post Payment", "Record a collection and receipt.", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }});
-        if (canViewPaymentHistory()) addActionCard("Payment History", "Find receipts and payment records.", new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }});
-        if (canPrintCollectionSheet()) addActionCard("Weekly Collection Sheet", "View and print due collections.", new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }});
-        if (canViewReports()) addActionCard("Reports", "Open collection, loan, and status reports.", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
-        if (canViewCommissionReports()) addActionCard(isCollector() ? "My Commission" : "Commission Summary", "Review commission balances and releases.", new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }});
-        if (isAdmin()) addActionCard("Admin Checks", "System checks, users, backups, imports, and cleanup.", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
-        addSection("Due Today / Overdue");
+        addActionGrid(
+                new String[]{canAddClient() ? "Add Client" : null, canReleaseLoan() ? "Release Loan" : null, canPostPayment() ? "Post Payment" : null, canViewPaymentHistory() ? "Search Borrower" : null},
+                new String[]{"+", "▤", "₱", "⌕"},
+                new String[]{"Register borrower", "Create account", "Record collection", "Find records"},
+                new View.OnClickListener[]{
+                        canAddClient() ? new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }} : null,
+                        canReleaseLoan() ? new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }} : null,
+                        canPostPayment() ? new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }} : null,
+                        canViewPaymentHistory() ? new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }} : null
+                });
+        addSection("Tools");
+        addActionGrid(
+                new String[]{canPrintCollectionSheet() ? "Collection Sheet" : null, canViewReports() ? "Reports" : null, canViewCommissionReports() ? (isCollector() ? "My Commission" : "Commission") : null, isAdmin() ? "Backup" : null},
+                new String[]{"☑", "▥", "%", "⬇"},
+                new String[]{"Due borrowers", "Report hub", "Earnings", "Backup now"},
+                new View.OnClickListener[]{
+                        canPrintCollectionSheet() ? new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }} : null,
+                        canViewReports() ? new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }} : null,
+                        canViewCommissionReports() ? new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }} : null,
+                        isAdmin() ? new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }} : null
+                });
+        addSection("Smart Alerts");
+        addCompactAlert(dueTodayCount > 0 ? dueTodayCount + " borrower(s) due today" : "No borrowers due today", dueTodayCount > 0 ? "Due Today" : "Current", new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }});
+        addCompactAlert(overdueCount > 0 ? overdueCount + " overdue loan(s)" : "No overdue loans", overdueCount > 0 ? "Overdue" : "Current", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Overdue", "today", true, false, false); }});
+        if (isAdmin()) addAdminDashboardAlerts();
+        addSection("Due Today / Overdue Preview");
         addScheduleList(scopedScheduleSql("s.status!='Paid' AND s.due_date<=? ORDER BY s.due_date LIMIT 20"),
                 appendScopedArgs(new String[]{ISO.format(new Date())}));
     }
 
     private void showMainMenu() {
         clear("Menu");
-        addSection("Daily Operations");
-        if (canPostPayment()) addActionCard("Post Payment", "Record a borrower payment.", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }});
-        if (canViewPaymentHistory()) addActionCard("Payment History", "Search by borrower or loan.", new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }});
-        addSection("Clients and Loans");
-        addActionCard("Clients", "View borrowers and assigned accounts.", new View.OnClickListener() { public void onClick(View v) { showClients(); }});
-        addActionCard("Loans", "View loan accounts and balances.", new View.OnClickListener() { public void onClick(View v) { showLoans(); }});
-        if (canAddClient()) addActionCard("Add Client", "Register a borrower.", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
-        if (canReleaseLoan()) addActionCard("Release Loan", "Create a loan account.", new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }});
-        addSection("Collections");
-        if (canPrintCollectionSheet()) addActionCard("Weekly Collection Sheet", "Due and overdue borrowers.", new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }});
-        if (canPrintPassbook()) addActionCard("Passbook", "Print assigned borrower passbooks.", new View.OnClickListener() { public void onClick(View v) { showPassbookPrompt(); }});
-        addSection("Reports");
-        if (canViewReports()) addActionCard("Reports", "Collection, overdue, loan, and status reports.", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
-        addSection("Commission");
-        if (canViewCommissionReports()) addActionCard(isCollector() ? "My Commission" : "Commission Summary", "Commission balances and releases.", new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }});
-        if (isAdmin()) addActionCard("Commission Release", "Release collector commission.", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
-        addSection("Printing");
-        if (canPrintPassbook()) addActionCard("Print Passbook", "Borrower passbook PDF/print view.", new View.OnClickListener() { public void onClick(View v) { showPassbookPrompt(); }});
-        if (canPrintCollectionSheet()) addActionCard("Print Collection Sheet", "Collector collection sheet.", new View.OnClickListener() { public void onClick(View v) { showCollectionSheetPrintDialog(); }});
-        addSection("Backup and Import");
-        if (isAdmin()) addActionCard("Backup Data", "Create JSON or encrypted backup.", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
-        if (isAdmin()) addActionCard("Import Google Sheet CSV", "Import legacy sheet exports.", new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }});
-        addSection("Admin Tools");
-        if (isAdmin()) addActionCard("Admin Checks", "System, users, import validation, and cleanup.", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
-        addActionCard("Help / Quick Guide", "Workflow, backup, import, and printing guide.", new View.OnClickListener() { public void onClick(View v) { showHelpGuide(); }});
+        if (canPostPayment() || canViewPaymentHistory()) {
+            addMenuGroup("Daily Operations", "Fast actions for today's work.",
+                    new String[]{canPostPayment() ? "Post Payment" : null, canViewPaymentHistory() ? "Payment History" : null},
+                    new View.OnClickListener[]{
+                            canPostPayment() ? new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }} : null,
+                            canViewPaymentHistory() ? new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }} : null
+                    });
+        }
+        addMenuGroup("Borrowers & Loans", "Borrower registry and loan accounts.",
+                new String[]{"Clients", "Loans", canAddClient() ? "Add Client" : null, canReleaseLoan() ? "Release Loan" : null},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showClients(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showLoans(); }},
+                        canAddClient() ? new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }} : null,
+                        canReleaseLoan() ? new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }} : null
+                });
+        if (canPrintCollectionSheet() || canPrintPassbook()) {
+            addMenuGroup("Collections", "Due borrowers, passbooks, and collection sheets.",
+                    new String[]{canPrintCollectionSheet() ? "Collection Sheet" : null, canPrintPassbook() ? "Passbook" : null},
+                    new View.OnClickListener[]{
+                            canPrintCollectionSheet() ? new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }} : null,
+                            canPrintPassbook() ? new View.OnClickListener() { public void onClick(View v) { showPassbookPrompt(); }} : null
+                    });
+        }
+        if (canViewReports()) addMenuGroup("Reports", "Collection, overdue, loan, and status reports.", new String[]{"Open Reports"}, new View.OnClickListener[]{new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }}});
+        if (canViewCommissionReports()) {
+            addMenuGroup("Commission", "Commission balances, releases, and history.",
+                    new String[]{isCollector() ? "My Commission" : "Summary", isAdmin() ? "Release" : null},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }},
+                            isAdmin() ? new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }} : null
+                    });
+        }
+        if (isAdmin()) {
+            addMenuGroup("Admin & Security", "Users, checks, audit logs, and release readiness.", new String[]{"Admin Checks", "Users", "Audit Logs"}, new View.OnClickListener[]{
+                    new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }},
+                    new View.OnClickListener() { public void onClick(View v) { showUsers(); }},
+                    new View.OnClickListener() { public void onClick(View v) { showAuditLogs(null); }}
+            });
+            addMenuGroup("Backup & Import", "Protect and migrate local data.", new String[]{"Backup", "Import CSV", "Import Validation"}, new View.OnClickListener[]{
+                    new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }},
+                    new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }},
+                    new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }}
+            });
+        }
+        addMenuGroup("Help", "Workflow, backup, import, and printing guide.", new String[]{"Quick Guide"}, new View.OnClickListener[]{new View.OnClickListener() { public void onClick(View v) { showHelpGuide(); }}});
     }
 
     private void showAdminChecks() {
         if (!requireAdmin()) return;
         clear("Admin Checks");
-        addSection("System");
-        addActionCard("System Check", "Run database and lending integrity checks.", new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }});
-        addActionCard("Audit Logs", "Review sensitive local actions.", new View.OnClickListener() { public void onClick(View v) { showAuditLogs(null); }});
-        addActionCard("Search Audit Logs", "Filter audit entries by action.", new View.OnClickListener() { public void onClick(View v) { showAuditSearchDialog(); }});
-        addSection("Data Safety");
-        addActionCard("Backup Data", "Create standard or encrypted backups.", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
-        addActionCard("Restore Data", "Restore from a validated backup.", new View.OnClickListener() { public void onClick(View v) { showRestoreDataDialog(); }});
-        addActionCard("Export CSV", "Export local tables and reports.", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
-        addSection("Import Tools");
-        addActionCard("Import Google Sheet CSV", "Import old tracker CSV files.", new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }});
-        addActionCard("Import Validation", "Check imported links, amounts, statuses, and collectors.", new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }});
-        addActionCard("Collector Cleanup", "Map non-canonical collector names.", new View.OnClickListener() { public void onClick(View v) { showCollectorCleanupTool(); }});
-        addActionCard("Recalculate Imported Balances", "Reconcile loans, clients, schedules, and commission.", new View.OnClickListener() { public void onClick(View v) { showRecalculateImportedBalancesDialog(); }});
-        addActionCard("Import Summary History", "View recent import audit entries.", new View.OnClickListener() { public void onClick(View v) { showImportSummaryHistory(); }});
-        addSection("Users and Security");
-        addActionCard("Manage Users", "Create users and role access.", new View.OnClickListener() { public void onClick(View v) { showUsers(); }});
-        addActionCard("Change Password", "Update your login password.", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
-        addSection("Commission Settings");
-        addActionCard("Commission Settings", "Collector commission rates.", new View.OnClickListener() { public void onClick(View v) { showCommissionSettings(); }});
-        addActionCard("Commission Release", "Release available commission.", new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }});
-        addActionCard("Commission Release History", "Review released commission.", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
-        addActionCard("Recalculate Commission", "Rebuild commission from fully-paid loans.", new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }});
+        addMenuGroup("System Tools", "Integrity checks, release testing, and audit trail review.",
+                new String[]{"[check] System Check", "[list] Release Checklist", "[log] Audit Logs", "[search] Search Audit"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReleaseReadinessChecklist(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showAuditLogs(null); }},
+                        new View.OnClickListener() { public void onClick(View v) { showAuditSearchDialog(); }}
+                });
+        addMenuGroup("Data Safety", "Back up, restore, and export local data.",
+                new String[]{"[backup] Backup Data", "[restore] Restore Data", "[csv] Export CSV"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showRestoreDataDialog(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }}
+                });
+        addMenuGroup("Import and Migration", "Import Google Sheet CSVs, validate records, and clean migrated data.",
+                new String[]{"[import] Import CSV", "[validate] Import Validation", "[cleanup] Collector Cleanup", "[recalc] Recalculate Balances", "[history] Import History"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showGoogleCsvImportMenu(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showCollectorCleanupTool(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showRecalculateImportedBalancesDialog(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showImportSummaryHistory(); }}
+                });
+        addMenuGroup("Users and Security", "Manage local users, roles, and passwords.",
+                new String[]{"[users] Manage Users", "[key] Change Password"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showUsers(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }}
+                });
+        addMenuGroup("Commission Tools", "Rates, releases, history, and recalculation.",
+                new String[]{"[rate] Commission Settings", "[release] Commission Release", "[history] Release History", "[recalc] Recalculate Commission"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showCommissionSettings(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }},
+                        new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }}
+                });
     }
 
     private void showAuditSearchDialog() {
@@ -648,6 +729,9 @@ public class MainActivity extends Activity {
         addCard("Backup Reminder",
                 "Use Admin Checks > Backup Data > Encrypted JSON Backup before importing, restoring, or cleaning real data.",
                 (String) null, (View.OnClickListener) null);
+        addCard("Update Safety",
+                "Create an encrypted backup before updating the app, before restoring data, and before importing CSV files. Keep the backup passphrase somewhere safe; it cannot be recovered by the app.",
+                (String) null, (View.OnClickListener) null);
         addCard("Payment Posting",
                 "Use Post Payment, pick the borrower/loan, confirm amount and method, then print or save the receipt from Android's print dialog.",
                 (String) null, (View.OnClickListener) null);
@@ -666,6 +750,49 @@ public class MainActivity extends Activity {
         addCard("Encrypted Backup",
                 "Choose Backup Data, select Encrypted JSON Backup, enter a passphrase, and store the generated file safely.",
                 (String) null, (View.OnClickListener) null);
+        addCard("Build APK",
+                "Debug APK: gradlew :app:assembleDebug. Release APK: gradlew :app:assembleRelease. Outputs are under app/build/outputs/apk/debug or app/build/outputs/apk/release.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Install APK on Phone",
+                "Copy the APK to the phone or use adb install -r. After installing, login as Admin, run System Check, and confirm reports, printing, backup, import, and role restrictions.",
+                (String) null, (View.OnClickListener) null);
+    }
+
+    private void showReleaseReadinessChecklist() {
+        if (!requireAdmin()) return;
+        clear("Release Readiness Checklist");
+        addAction("Back to Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
+        addAction("Run System Check", new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }});
+        addAction("Create Encrypted Backup", new View.OnClickListener() { public void onClick(View v) { showEncryptedBackupDialog(); }});
+        addSection("Regression Tests");
+        addChecklistCard("Login / Logout", "Login as Admin, Cashier, Collector, and Viewer. Confirm Logout returns to the login screen.");
+        addChecklistCard("Admin Password Change", "Change the default Admin password and confirm old password no longer works.");
+        addChecklistCard("Clients", "Add a client, edit it, assign collector, search it, and verify old imported clients still show.");
+        addChecklistCard("Loans", "Release a loan, verify schedule rows, search loan, and print loan release form.");
+        addChecklistCard("Payments", "Post a valid payment, verify receipt number, print receipt, and view payment history.");
+        addChecklistCard("Void Payment", "Void a payment with reason and confirm balance, schedule, audit log, and commission reversal if applicable.");
+        addChecklistCard("Cancel Loan", "Cancel an active loan with reason and confirm no active open schedule remains.");
+        addChecklistCard("Reports", "Run Daily, Weekly, Overdue, Loan Release, Fully Paid, Cancelled/Voided, Collector Performance, and commission reports.");
+        addChecklistCard("Commission Earning", "Fully pay a loan and confirm commission equals principal times collector rate only once.");
+        addChecklistCard("Commission Release", "Release available commission, view release history, and verify remaining balance.");
+        addChecklistCard("Recalculate Commission", "Run tool and verify duplicate/invalid commission rows are reversed.");
+        addChecklistCard("CSV Import", "Import test CSVs in order: Clients, Loans, Payment Schedule, Repayments, Rates, Dashboard Reference.");
+        addChecklistCard("Import Validation", "Run Import Validation, inspect mismatches, run Collector Cleanup if needed, then recalculate imported balances.");
+        addChecklistCard("Backup / Restore", "Create standard and encrypted backups. Restore encrypted backup on a test device/profile.");
+        addChecklistCard("Printing", "Print/save receipt, passbook, collection sheet, loan form, and supported reports as PDF.");
+        addChecklistCard("Role Restrictions", "Confirm Cashier, Collector, and Viewer only see allowed actions and data.");
+        addChecklistCard("Dashboard UI", "Open Home as each role and confirm KPI cards, quick actions, alerts, navigation, client cards, and loan cards display correctly.");
+        addSection("Release Prep");
+        addCard("Project Settings",
+                "App name: A&L Alalay Loan Tracker\nPackage: com.alalay.loantracker\nminSdk: 23\ntargetSdk: 35\ncompileSdk: 35\nallowBackup: false\nIcon: @drawable/ic_launcher placeholder\nVersion: 1.0 (code 1)",
+                (String) null, (View.OnClickListener) null);
+        addCard("Signing Notes",
+                "Debug APK is for testing only. For a release APK, configure a private Android signing key in Android Studio or a local Gradle signing config. Never commit keystores or passwords.",
+                (String) null, (View.OnClickListener) null);
+    }
+
+    private void addChecklistCard(String title, String body) {
+        addCard("[ ] " + title, body, (String) null, (View.OnClickListener) null);
     }
 
     private void pickGoogleCsv(String type) {
@@ -1970,14 +2097,16 @@ public class MainActivity extends Activity {
                     labels.add("History");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForClient(id); }});
                 }
+                if (canPostPayment()) {
+                    labels.add("Post Payment");
+                    listeners.add(new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }});
+                }
                 if (canEditClient()) {
                     labels.add("Edit");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showEditClientDialog(id); }});
                 }
-                addCard(c.getString(1) + "  [" + id + "]",
-                        "Phone: " + safe(c.getString(2)) + "\nAddress: " + safe(c.getString(3)) +
-                                "\n" + statusLine(c.getString(4)) + "\nActive loans: " + c.getInt(5) +
-                                "\nBalance / Outstanding: " + peso(c.getDouble(6)) + "\nCollector: " + safe(c.getString(7)),
+                addClientCard(c.getString(1), c.getString(4), id, c.getString(2), c.getString(3),
+                        c.getString(7), c.getInt(5), c.getDouble(6),
                         labels.toArray(new String[0]), listeners.toArray(new View.OnClickListener[0]));
             } while (c.moveToNext());
         } finally {
@@ -1986,10 +2115,21 @@ public class MainActivity extends Activity {
     }
 
     private void showLoans() {
+        showLoansFiltered("Active");
+    }
+
+    private void showLoansFiltered(String filter) {
         clear("Loans");
-        if (canReleaseLoan()) addAction("Release Loan", new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }});
-        addAction("Search Loans", new View.OnClickListener() { public void onClick(View v) { showLoanSearchDialog(); }});
-        showLoanRows(scopedLoanRowsSql("1=1 ORDER BY release_date DESC"), scopedArgs());
+        addLoanFilterChips(filter);
+        addActionGrid(
+                new String[]{canReleaseLoan() ? "Release Loan" : null, "Search Loans"},
+                new String[]{"▤", "⌕"},
+                new String[]{"New account", "Find loan"},
+                new View.OnClickListener[]{
+                        canReleaseLoan() ? new View.OnClickListener() { public void onClick(View v) { showLoanDialog(); }} : null,
+                        new View.OnClickListener() { public void onClick(View v) { showLoanSearchDialog(); }}
+                });
+        showLoanRows(scopedLoanRowsSql(loanFilterWhere(filter)), loanFilterArgs(filter));
     }
 
     private void showLoanRows(String sql, String[] args) {
@@ -2003,6 +2143,10 @@ public class MainActivity extends Activity {
                 final String loanId = c.getString(0);
                 ArrayList<String> labels = new ArrayList<>();
                 ArrayList<View.OnClickListener> listeners = new ArrayList<>();
+                labels.add("Details");
+                listeners.add(new View.OnClickListener() { public void onClick(View v) { showLoanDetails(loanId); }});
+                labels.add("Schedule");
+                listeners.add(new View.OnClickListener() { public void onClick(View v) { showRepaymentSchedule(loanId); }});
                 if (canPostPayment()) {
                     labels.add("Collect");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(loanId); }});
@@ -2011,21 +2155,20 @@ public class MainActivity extends Activity {
                     labels.add("History");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForLoan(loanId); }});
                 }
+                if (canPrintPassbook()) {
+                    labels.add("Print");
+                    listeners.add(new View.OnClickListener() { public void onClick(View v) { printPassbook(loanId); }});
+                }
                 if (canPrintLoanReleaseForm(loanId)) {
                     labels.add("Print Form");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { printLoanReleaseForm(loanId); }});
                 }
                 if (canCancelLoan()) {
-                    labels.add("Cancel loan");
+                    labels.add("Cancel");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showCancelLoanDialog(loanId); }});
                 }
-                addCard(loanId + " - " + c.getString(1),
-                        "Borrower: " + c.getString(1) + "\nLoan Account: " + loanId +
-                                "\nReleased: " + c.getString(2) + "\nPrincipal: " + peso(c.getDouble(3)) +
-                                " | Weekly due: " + peso(c.getDouble(4)) + "\nTotal due: " + peso(c.getDouble(5)) +
-                                "\nBalance: " + peso(c.getDouble(6)) + "\n" + statusLine(c.getString(7)) +
-                                "\nNext due: " + safe(c.getString(8)) + "\nCollector: " + safe(c.getString(9)) +
-                                "\nTerms: " + safe(c.getString(10)),
+                addLoanCard(loanId, c.getString(1), c.getString(7), c.getDouble(3), c.getDouble(5),
+                        c.getDouble(6), c.getString(8), c.getString(9), c.getString(2), c.getString(10),
                         labels.toArray(new String[0]), listeners.toArray(new View.OnClickListener[0]));
             } while (c.moveToNext());
         } finally {
@@ -2346,17 +2489,215 @@ public class MainActivity extends Activity {
     private void showReportsMenu() {
         if (!requirePermission(canViewReports())) return;
         clear("Reports");
-        addAction("Daily Collection Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Daily Collection", "today", true, true, false); }});
-        addAction("Weekly Collection Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Weekly Collection", "week", true, false, false); }});
-        addAction("Overdue Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Overdue", "today", true, false, false); }});
-        addAction("Loan Release Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Loan Release", "range", true, false, true); }});
-        addAction("Fully Paid Loans Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Fully Paid Loans", "range", true, false, false); }});
-        addAction("Cancelled / Voided Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Cancelled / Voided", "range", true, false, false); }});
-        addAction("Collector Performance Report", new View.OnClickListener() { public void onClick(View v) { showReportFilter("Collector Performance", "range", true, false, false); }});
-        addAction("Commission Summary Report", new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }});
-        addAction("Commission Release Report", new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }});
-        addAction("Collector Commission Balance Report", new View.OnClickListener() { public void onClick(View v) { showCommissionBalanceReport(); }});
-        addAction("Export CSV", new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }});
+        addMenuGroup("Collection Reports", "Daily and weekly collections with print and CSV options inside each report.",
+                new String[]{"Daily Collection", "Weekly Collection", "Export CSV"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Daily Collection", "today", true, true, false); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Weekly Collection", "week", true, false, false); }},
+                        new View.OnClickListener() { public void onClick(View v) { showCsvExportMenu(); }}
+                });
+        addMenuGroup("Loan Reports", "Released, fully paid, cancelled, and collector performance records.",
+                new String[]{"Loan Release", "Fully Paid Loans", "Cancelled / Voided", "Collector Performance"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Loan Release", "range", true, false, true); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Fully Paid Loans", "range", true, false, false); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Cancelled / Voided", "range", true, false, false); }},
+                        new View.OnClickListener() { public void onClick(View v) { showReportFilter("Collector Performance", "range", true, false, false); }}
+                });
+        addMenuGroup("Overdue Reports", "Accounts needing review and follow-up.",
+                new String[]{"Overdue Report"},
+                new View.OnClickListener[]{new View.OnClickListener() { public void onClick(View v) { showReportFilter("Overdue", "today", true, false, false); }}});
+        if (canViewCommissionReports()) {
+            addMenuGroup("Commission Reports", "Commission earnings, releases, and remaining balances.",
+                    new String[]{"Commission Summary", "Commission Release", "Commission Balance"},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }},
+                            new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }},
+                            new View.OnClickListener() { public void onClick(View v) { showCommissionBalanceReport(); }}
+                    });
+        }
+        if (isAdmin()) {
+            addMenuGroup("Import / Validation Reports", "Migration checks and imported dashboard comparison.",
+                    new String[]{"Import Validation", "Import History"},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() { public void onClick(View v) { showImportValidationDashboard(); }},
+                            new View.OnClickListener() { public void onClick(View v) { showImportSummaryHistory(); }}
+                    });
+        }
+    }
+
+    private void addLoanFilterChips(final String activeFilter) {
+        final String[] filters = new String[]{"Active", "Due Soon", "Overdue", "Paid", "Cancelled", "All"};
+        HorizontalScrollView scroller = new HorizontalScrollView(this);
+        scroller.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (final String f : filters) {
+            Button b = compactButton(f, f.equals(activeFilter) ? NAVY : 0xff475569, new View.OnClickListener() {
+                public void onClick(View v) { showLoansFiltered(f); }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(36));
+            lp.setMargins(0, 0, dp(6), dp(8));
+            row.addView(b, lp);
+        }
+        scroller.addView(row);
+        content.addView(scroller);
+    }
+
+    private String loanFilterWhere(String filter) {
+        String f = safe(filter).toLowerCase(Locale.US);
+        String order = " ORDER BY release_date DESC";
+        if ("active".equals(f)) return "status='Active'" + order;
+        if ("paid".equals(f)) return "status='Paid'" + order;
+        if ("cancelled".equals(f)) return "status='Cancelled'" + order;
+        if ("overdue".equals(f)) return "status='Active' AND loan_id IN (SELECT loan_id FROM schedule WHERE status!='Paid' AND due_date<?)" + order;
+        if ("due soon".equals(f)) return "status='Active' AND loan_id IN (SELECT loan_id FROM schedule WHERE status!='Paid' AND due_date BETWEEN ? AND ?)" + order;
+        return "1=1" + order;
+    }
+
+    private String[] loanFilterArgs(String filter) {
+        String f = safe(filter).toLowerCase(Locale.US);
+        if ("overdue".equals(f)) return appendScopedArgs(new String[]{ISO.format(new Date())});
+        if ("due soon".equals(f)) {
+            Calendar c = Calendar.getInstance();
+            String start = ISO.format(c.getTime());
+            c.add(Calendar.DAY_OF_MONTH, 7);
+            return appendScopedArgs(new String[]{start, ISO.format(c.getTime())});
+        }
+        return scopedArgs();
+    }
+
+    private void showLoanDetails(final String loanId) {
+        if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT loan_id,client_name,principal,interest_rate,total_due,balance,term_weeks,weekly_due,release_date,maturity_date,collector,released_thru,status,next_due_date,terms,reference_number FROM loans WHERE loan_id=?", new String[]{loanId});
+        try {
+            if (!c.moveToFirst()) { toast("Loan not found."); return; }
+            clear("Loan Details");
+            addCard("Loan " + safe(c.getString(0)),
+                    statusBadge(c.getString(12)) +
+                            "\nBorrower: " + safe(c.getString(1)) +
+                            "\nBalance: " + peso(c.getDouble(5)) +
+                            "\nNext Due: " + fallback(c.getString(13), "Not set"),
+                    new String[]{canPostPayment() ? "Collect" : null, "Schedule", "History", canPrintLoanReleaseForm(loanId) ? "Print Form" : null},
+                    new View.OnClickListener[]{
+                            canPostPayment() ? new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(loanId); }} : null,
+                            new View.OnClickListener() { public void onClick(View v) { showRepaymentSchedule(loanId); }},
+                            new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForLoan(loanId); }},
+                            canPrintLoanReleaseForm(loanId) ? new View.OnClickListener() { public void onClick(View v) { printLoanReleaseForm(loanId); }} : null
+                    });
+            addSection("Loan Summary");
+            addKpiGrid(
+                    new String[]{"₱", "%", "▤", "⏱"},
+                    new String[]{peso(c.getDouble(2)), percent(c.getDouble(3)), peso(c.getDouble(4)), String.valueOf(c.getInt(6))},
+                    new String[]{"Principal", "Interest", "Total Payable", "Weeks"},
+                    new String[]{"Released amount", "Rate", "With interest", "Weekly term"},
+                    new String[]{"Active", "Current", "Active", "Due Soon"},
+                    new View.OnClickListener[]{null, null, null, null});
+            addCard("Account Information",
+                    "Loan Account: " + safe(c.getString(0)) +
+                            "\nReference: " + fallback(c.getString(15), c.getString(0)) +
+                            "\nWeekly Due: " + peso(c.getDouble(7)) +
+                            "\nRelease Date: " + fallback(c.getString(8), "Not set") +
+                            "\nMaturity Date: " + fallback(c.getString(9), "Not set") +
+                            "\nCollector: " + fallback(c.getString(10), "Unassigned") +
+                            "\nRelease Channel: " + fallback(c.getString(11), "Not set") +
+                            "\nTerms: " + fallback(c.getString(14), "Not set"),
+                    (String) null, (View.OnClickListener) null);
+            addSection("Loan Progress");
+            addLoanTimeline(c.getString(12), loanId);
+        } finally {
+            c.close();
+        }
+    }
+
+    private void showRepaymentSchedule(final String loanId) {
+        if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        Cursor loan = db.getReadableDatabase().rawQuery("SELECT client_name,principal,total_due,term_weeks,balance,status FROM loans WHERE loan_id=?", new String[]{loanId});
+        try {
+            if (!loan.moveToFirst()) { toast("Loan not found."); return; }
+            clear("Repayment Schedule");
+            addCard("Loan " + loanId,
+                    statusBadge(loan.getString(5)) +
+                            "\nBorrower: " + safe(loan.getString(0)) +
+                            "\nTotal Payable: " + peso(loan.getDouble(2)) +
+                            "\nBalance: " + peso(loan.getDouble(4)),
+                    new String[]{"Loan Details", canPostPayment() ? "Collect" : null},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() { public void onClick(View v) { showLoanDetails(loanId); }},
+                            canPostPayment() ? new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(loanId); }} : null
+                    });
+            addSection("Installments");
+            addRepaymentScheduleCards(loanId, loan.getDouble(1), loan.getDouble(2), Math.max(1, loan.getInt(3)));
+        } finally {
+            loan.close();
+        }
+    }
+
+    private void addLoanTimeline(String status, String loanId) {
+        boolean hasSchedule = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM schedule WHERE loan_id=?", new String[]{loanId}) > 0;
+        boolean hasPayment = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM repayments WHERE loan_id=? AND voided=0", new String[]{loanId}) > 0;
+        boolean paid = "Paid".equalsIgnoreCase(status);
+        boolean cancelled = "Cancelled".equalsIgnoreCase(status);
+        addTimelineStep("1", "Loan Released", "Release record is saved.", true);
+        addTimelineStep("2", "Repayment Scheduled", hasSchedule ? "Payment schedule is available." : "No schedule rows found.", hasSchedule);
+        addTimelineStep("3", "Active Collection", hasPayment ? "At least one valid payment posted." : "Waiting for collections.", hasPayment || paid);
+        addTimelineStep("4", cancelled ? "Closed / Cancelled" : "Fully Paid / Closed", paid ? "Loan is fully paid." : (cancelled ? "Loan is cancelled." : "Still collecting."), paid || cancelled);
+    }
+
+    private void addTimelineStep(String step, String title, String subtitle, boolean complete) {
+        LinearLayout card = modernCard(complete ? "Paid" : "Due Soon");
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView dot = new TextView(this);
+        dot.setText(complete ? "✓" : step);
+        dot.setTextColor(0xffffffff);
+        dot.setTextSize(13);
+        dot.setTypeface(Typeface.DEFAULT_BOLD);
+        dot.setGravity(Gravity.CENTER);
+        dot.setBackground(roundedBg(complete ? GREEN : AMBER, 0, 24));
+        row.addView(dot, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        TextView text = new TextView(this);
+        text.setText(title + "\n" + subtitle);
+        text.setTextColor(INK);
+        text.setTextSize(14);
+        text.setPadding(dp(10), 0, 0, 0);
+        row.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
+        card.addView(row);
+        addCardToContent(card);
+    }
+
+    private void addRepaymentScheduleCards(String loanId, double principal, double totalDue, int termWeeks) {
+        double principalPart = round2(principal / termWeeks);
+        double interestPart = round2(Math.max(0, totalDue - principal) / termWeeks);
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT installment_no,due_date,scheduled_amount,paid_to_date,status FROM schedule WHERE loan_id=? ORDER BY installment_no", new String[]{loanId});
+        double cumulativePaid = 0;
+        try {
+            if (!c.moveToFirst()) {
+                addEmpty("No schedule rows found.");
+                return;
+            }
+            do {
+                cumulativePaid += c.getDouble(3);
+                double remaining = Math.max(0, totalDue - cumulativePaid);
+                double dueNow = Math.max(0, c.getDouble(2) - c.getDouble(3));
+                String status = dueNow <= 0.009 ? "Paid" : (dateBefore(c.getString(1), ISO.format(new Date())) ? "Overdue" : safe(c.getString(4)));
+                LinearLayout card = modernCard(status);
+                card.addView(titleStatusRow("Installment " + c.getInt(0), status));
+                card.addView(detailText("Due Date: " + safe(c.getString(1))));
+                card.addView(valueBlock("Amount Due", peso(c.getDouble(2)), statusAccentColor(status)));
+                card.addView(detailText("Principal Portion: " + peso(principalPart) +
+                        "\nInterest Portion: " + peso(interestPart) +
+                        "\nPaid Amount: " + peso(c.getDouble(3)) +
+                        "\nRemaining Balance: " + peso(remaining)));
+                if (canPostPayment() && !"Paid".equalsIgnoreCase(status)) {
+                    addActionRow(card, new String[]{"Collect"}, new View.OnClickListener[]{new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(loanId); }}});
+                }
+                addCardToContent(card);
+            } while (c.moveToNext());
+        } finally {
+            c.close();
+        }
     }
 
     private void showReportFilter(String report, String mode, boolean collectorField, boolean methodField, boolean releasedByField) {
@@ -2788,13 +3129,14 @@ public class MainActivity extends Activity {
     private void showCommissionRelease() {
         if (!requireAdmin()) return;
         LinearLayout form = form();
-        final EditText collector = input("Collector");
+        form.addView(formNote("Release only available earned commission. Review the confirmation before saving."));
+        final EditText collector = input("Collector *");
         Button pickCollector = new Button(this);
         pickCollector.setText("Pick Collector");
         pickCollector.setAllCaps(false);
         pickCollector.setOnClickListener(v -> showCollectorPicker(collector));
-        final EditText amount = numericInput("Amount to release");
-        final EditText method = input("Method");
+        final EditText amount = numericInput("Amount to release *");
+        final EditText method = input("Release Method *");
         Button pickMethod = new Button(this);
         pickMethod.setText("Pick Release Method");
         pickMethod.setAllCaps(false);
@@ -2945,12 +3287,19 @@ public class MainActivity extends Activity {
             do {
                 double due = Math.max(0, c.getDouble(4) - c.getDouble(5));
                 String status = due <= 0.009 ? "Paid" : (dateBefore(c.getString(3), ISO.format(new Date())) ? "Overdue" : "Due Soon");
-                addCard(c.getString(1) + " - " + c.getString(0),
-                        "Borrower: " + c.getString(1) + "\nLoan Account: " + c.getString(0) +
-                                "\nSchedule: " + c.getInt(2) + "\nDue date: " + c.getString(3) +
-                                "\nAmount due: " + peso(due) + "\nLoan balance: " + peso(c.getDouble(6)) +
-                                "\n" + statusLine(status),
-                        (String) null, (View.OnClickListener) null);
+                final String loanId = c.getString(0);
+                addCard("Installment " + c.getInt(2) + " • " + c.getString(1),
+                        statusBadge(status) +
+                                "\nLoan Account: " + loanId +
+                                "\nDue Date: " + c.getString(3) +
+                                "\nAmount Due: " + peso(due) +
+                                "\nPaid: " + peso(c.getDouble(5)) +
+                                "\nLoan Balance: " + peso(c.getDouble(6)),
+                        new String[]{"Schedule", canPostPayment() ? "Collect" : null},
+                        new View.OnClickListener[]{
+                                new View.OnClickListener() { public void onClick(View v) { showRepaymentSchedule(loanId); }},
+                                canPostPayment() ? new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(loanId); }} : null
+                        });
             } while (c.moveToNext());
         } finally {
             c.close();
@@ -2960,11 +3309,12 @@ public class MainActivity extends Activity {
     private void showClientDialog() {
         if (!requirePermission(canAddClient())) return;
         LinearLayout form = form();
-        final EditText name = input("Client Name");
+        form.addView(formNote("Enter borrower details. Fields marked * are required."));
+        final EditText name = input("Client Name *");
         final EditText phone = input("Phone");
         final EditText address = input("Barangay / Address");
         final EditText employment = input("Employment");
-        final EditText collector = input("Collector");
+        final EditText collector = input("Collector *");
         Button pickCollector = new Button(this);
         pickCollector.setText("Pick Collector");
         pickCollector.setAllCaps(false);
@@ -3060,7 +3410,8 @@ public class MainActivity extends Activity {
     private void showLoanDialogForClient(String clientId) {
         if (!requirePermission(canReleaseLoan())) return;
         LinearLayout form = form();
-        final EditText client = input("Client ID");
+        form.addView(formNote("Release a loan only after verifying borrower details and collector assignment. Fields marked * are required."));
+        final EditText client = input("Client ID *");
         client.setText(clientId);
         final TextView selectedBorrower = new TextView(this);
         selectedBorrower.setText(clientId.isEmpty() ? "No borrower selected." : "Client ID: " + clientId);
@@ -3068,17 +3419,17 @@ public class MainActivity extends Activity {
         pickBorrower.setText("Pick Borrower");
         pickBorrower.setAllCaps(false);
         pickBorrower.setOnClickListener(v -> showBorrowerPicker(client, selectedBorrower));
-        final EditText principal = numericInput("Principal, e.g. 5000");
-        final EditText rate = numericInput("Interest Rate decimal, e.g. 0.20");
+        final EditText principal = numericInput("Principal * e.g. 5000");
+        final EditText rate = numericInput("Interest Rate * e.g. 0.20");
         rate.setText("0.20");
-        final EditText weeks = integerInput("Term Weeks");
+        final EditText weeks = integerInput("Term Weeks *");
         weeks.setText("10");
-        final EditText collector = input("Collector");
+        final EditText collector = input("Collector *");
         Button pickCollector = new Button(this);
         pickCollector.setText("Pick Collector");
         pickCollector.setAllCaps(false);
         pickCollector.setOnClickListener(v -> showCollectorPicker(collector));
-        final EditText releasedThru = input("Released Thru");
+        final EditText releasedThru = input("Release Method *");
         Button pickReleaseMethod = new Button(this);
         pickReleaseMethod.setText("Pick Release Method");
         pickReleaseMethod.setAllCaps(false);
@@ -3118,6 +3469,9 @@ public class MainActivity extends Activity {
     private void showCollectPaymentDialog(String loan) {
         if (!requirePermission(canPostPayment())) return;
         LinearLayout form = form();
+        form.addView(formNote("Post Payment"));
+        form.addView(formNote("Pick borrower and active loan first, then confirm the amount before posting."));
+        form.addView(formStep("Step 1", "Select Borrower"));
         final EditText clientId = input("Borrower Client ID (optional)");
         final TextView selectedBorrower = new TextView(this);
         selectedBorrower.setText("Borrower: All active loans");
@@ -3125,7 +3479,7 @@ public class MainActivity extends Activity {
         pickBorrower.setText("Pick Borrower");
         pickBorrower.setAllCaps(false);
         pickBorrower.setOnClickListener(v -> showBorrowerPicker(clientId, selectedBorrower));
-        final EditText loanId = input("Loan ID");
+        final EditText loanId = input("Loan ID *");
         loanId.setText(loan);
         final TextView selectedLoan = new TextView(this);
         selectedLoan.setText(loan.isEmpty() ? "No loan selected." : "Loan ID: " + loan);
@@ -3133,25 +3487,48 @@ public class MainActivity extends Activity {
         pickLoan.setText("Pick Active Loan");
         pickLoan.setAllCaps(false);
         pickLoan.setOnClickListener(v -> showLoanPickerForClient(loanId, selectedLoan, false, text(clientId)));
-        final EditText amount = numericInput("Amount");
-        final EditText method = input("Method");
+        TextView loanSummary = formSummaryCard(loanSummaryForPayment(loan));
+        loanId.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                loanSummary.setText(loanSummaryForPayment(s.toString()));
+            }
+            public void afterTextChanged(Editable s) {}
+        });
+        final EditText amount = numericInput("Amount *");
+        final EditText method = input("Payment Method *");
         method.setText("Cash");
         Button pickMethod = new Button(this);
         pickMethod.setText("Pick Payment Method");
         pickMethod.setAllCaps(false);
         pickMethod.setOnClickListener(v -> showOptionPicker("Payment Method", method, PAYMENT_METHODS));
+        LinearLayout methodChips = new LinearLayout(this);
+        methodChips.setOrientation(LinearLayout.VERTICAL);
+        methodChips.setPadding(0, dp(4), 0, dp(6));
+        methodChips.addView(methodChip("Cash", method));
+        methodChips.addView(methodChip("GCash", method));
+        methodChips.addView(methodChip("Bank Transfer", method));
+        methodChips.addView(methodChip("Other", method));
         final EditText paymentDate = input("Payment Date yyyy-MM-dd");
         paymentDate.setText(ISO.format(new Date()));
         Button pickDate = new Button(this);
         pickDate.setText("Pick Payment Date");
         pickDate.setAllCaps(false);
         pickDate.setOnClickListener(v -> showDatePicker(paymentDate));
-        final EditText postedBy = input("Collector / Cashier / Posted By");
+        final EditText postedBy = input("Collector / Cashier / Posted By *");
         postedBy.setText(currentUsername());
         final EditText remarks = input("Remarks");
-        form.addView(selectedBorrower); form.addView(clientId); form.addView(pickBorrower); form.addView(selectedLoan); form.addView(loanId); form.addView(pickLoan); form.addView(amount); form.addView(method); form.addView(pickMethod); form.addView(paymentDate); form.addView(pickDate); form.addView(postedBy); form.addView(remarks);
+        form.addView(selectedBorrower); form.addView(clientId); form.addView(pickBorrower);
+        form.addView(formStep("Step 2", "Select Active Loan"));
+        form.addView(selectedLoan); form.addView(loanId); form.addView(pickLoan); form.addView(loanSummary);
+        form.addView(formStep("Step 3", "Enter Amount"));
+        form.addView(amount);
+        form.addView(formStep("Step 4", "Select Payment Method"));
+        form.addView(method); form.addView(methodChips); form.addView(pickMethod);
+        form.addView(formStep("Step 5", "Payment Date and Notes"));
+        form.addView(paymentDate); form.addView(pickDate); form.addView(postedBy); form.addView(remarks);
         new AlertDialog.Builder(this)
-                .setTitle("Post Repayment")
+                .setTitle("Post Payment")
                 .setView(form)
                 .setPositiveButton("Post", (d, w) -> {
                     LoanRow lr = findLoan(text(loanId));
@@ -3353,10 +3730,11 @@ public class MainActivity extends Activity {
 
     private void showVoidPaymentDialog(String paymentId) {
         if (!requirePermission(canVoidPayment())) return;
-        final EditText reason = input("Reason for voiding payment");
-        final EditText user = input("Voided By");
+        final EditText reason = input("Reason for voiding payment *");
+        final EditText user = input("Voided By *");
         user.setText(currentUsername());
         LinearLayout form = form();
+        form.addView(formNote("Voiding keeps the original payment record, recalculates balances, and writes an audit log."));
         form.addView(reason);
         form.addView(user);
         new AlertDialog.Builder(this)
@@ -3416,10 +3794,11 @@ public class MainActivity extends Activity {
         if (lr == null) { toast("Loan not found."); return; }
         if ("Cancelled".equalsIgnoreCase(lr.status)) { toast("Loan is already cancelled."); return; }
         if ("Paid".equalsIgnoreCase(lr.status)) { toast("Paid loans should not be cancelled here."); return; }
-        final EditText reason = input("Reason for cancellation");
-        final EditText user = input("Cancelled By");
+        final EditText reason = input("Reason for cancellation *");
+        final EditText user = input("Cancelled By *");
         user.setText(currentUsername());
         LinearLayout form = form();
+        form.addView(formNote("Cancelled loans keep their records and should not accept new payments."));
         form.addView(reason);
         form.addView(user);
         new AlertDialog.Builder(this)
@@ -3545,9 +3924,16 @@ public class MainActivity extends Activity {
 
     private void showPaymentReceiptScreen(final String paymentId) {
         clear("Payment Receipt");
-        addAction("Back to Loans", new View.OnClickListener() { public void onClick(View v) { showLoans(); }});
-        addAction("View/Print Receipt", new View.OnClickListener() { public void onClick(View v) { printPaymentReceipt(paymentId); }});
-        addCard("Receipt Ready", paymentReceiptSummary(paymentId), (String) null, (View.OnClickListener) null);
+        addCard("✓ Payment Posted", paymentReceiptSummary(paymentId),
+                new String[]{"Print Receipt", "Payment History", "Back to Loans"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() { public void onClick(View v) { printPaymentReceipt(paymentId); }},
+                        new View.OnClickListener() { public void onClick(View v) {
+                            PaymentRow pr = findPayment(paymentId);
+                            if (pr != null) showPaymentHistoryForLoan(pr.loanId);
+                        }},
+                        new View.OnClickListener() { public void onClick(View v) { showLoans(); }}
+                });
     }
 
     private void showLoanReleasePrintScreen(final String loanId) {
@@ -4433,6 +4819,307 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void addDashboardHeader(String backupStatus) {
+        String today = new SimpleDateFormat("EEE, MMM d, yyyy", Locale.US).format(new Date());
+        String collector = "Collector".equals(currentUser.role) && !safe(currentUser.collectorName).isEmpty()
+                ? "\nCollector: " + currentUser.collectorName : "";
+        addCard("A&L Alalay", currentUser.fullName + "\nRole: " + currentUser.role + collector +
+                "\nToday: " + today + "\nBackup: " + backupStatus, (String) null, (View.OnClickListener) null);
+    }
+
+    private void addPortfolioCard(double outstanding, double collected, int activeLoans, double rate) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card.setBackground(roundedBg(CARD_BG, LINE, 14));
+        card.setElevation(dp(3));
+        View accent = new View(this);
+        accent.setBackgroundColor(outstanding > 0 ? BLUE : GREEN);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, dp(4));
+        alp.setMargins(0, 0, 0, dp(10));
+        card.addView(accent, alp);
+        TextView label = new TextView(this);
+        label.setText("Outstanding Balance");
+        label.setTextColor(MUTED);
+        label.setTextSize(13);
+        TextView value = new TextView(this);
+        value.setText(peso(outstanding));
+        value.setTextColor(INK);
+        value.setTextSize(28);
+        value.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView details = new TextView(this);
+        details.setText("Collection This Month: " + peso(collected) +
+                "\nActive Loans: " + activeLoans +
+                "\nCollection Rate: " + String.format(Locale.US, "%.1f%%", rate));
+        details.setTextColor(MUTED);
+        details.setTextSize(14);
+        details.setPadding(0, dp(6), 0, dp(8));
+        card.addView(label);
+        card.addView(value);
+        card.addView(details);
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button loans = compactButton("View Loans", NAVY, new View.OnClickListener() { public void onClick(View v) { showLoans(); }});
+        Button reports = compactButton("View Reports", NAVY, new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        actions.addView(loans, gridCellParams(0));
+        actions.addView(reports, gridCellParams(1));
+        card.addView(actions);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, 0, 0, dp(10));
+        content.addView(card, lp);
+    }
+
+    private void addKpiGrid(String[] icons, String[] values, String[] labels, String[] captions, String[] statuses, View.OnClickListener[] listeners) {
+        LinearLayout row = null;
+        int column = 0;
+        for (int i = 0; i < labels.length; i++) {
+            if (row == null || column == 2) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+                rlp.setMargins(0, 0, 0, dp(8));
+                content.addView(row, rlp);
+                column = 0;
+            }
+            row.addView(kpiCard(icons[i], values[i], labels[i], captions[i], statuses[i], listeners[i]), gridCellParams(column));
+            column++;
+        }
+        if (row != null && column == 1) {
+            TextView spacer = new TextView(this);
+            row.addView(spacer, gridCellParams(1));
+        }
+    }
+
+    private LinearLayout kpiCard(String icon, String value, String label, String caption, String status, View.OnClickListener listener) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(10), dp(10), dp(10), dp(10));
+        card.setBackground(roundedBg(statusColor(status), LINE, 12));
+        card.setElevation(dp(2));
+        View accent = new View(this);
+        accent.setBackgroundColor(statusAccentColor(status));
+        card.addView(accent, new LinearLayout.LayoutParams(-1, dp(3)));
+        TextView iconView = new TextView(this);
+        iconView.setText(icon);
+        iconView.setTextColor(MUTED);
+        iconView.setTextSize(12);
+        iconView.setPadding(0, dp(6), 0, 0);
+        TextView valueView = new TextView(this);
+        valueView.setText(value);
+        valueView.setTextColor(INK);
+        valueView.setTextSize(20);
+        valueView.setTypeface(Typeface.DEFAULT_BOLD);
+        valueView.setSingleLine(false);
+        TextView labelView = new TextView(this);
+        labelView.setText(label);
+        labelView.setTextColor(INK);
+        labelView.setTextSize(13);
+        labelView.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView captionView = new TextView(this);
+        captionView.setText(caption);
+        captionView.setTextColor(MUTED);
+        captionView.setTextSize(12);
+        card.addView(iconView);
+        card.addView(valueView);
+        card.addView(labelView);
+        card.addView(captionView);
+        if (listener != null) {
+            card.setClickable(true);
+            card.setOnClickListener(listener);
+        }
+        return card;
+    }
+
+    private void addActionGrid(String[] titles, String[] icons, String[] subtitles, View.OnClickListener[] listeners) {
+        LinearLayout row = null;
+        int column = 0;
+        for (int i = 0; i < titles.length; i++) {
+            if (titles[i] == null || listeners[i] == null) continue;
+            if (row == null || column == 2) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+                rlp.setMargins(0, 0, 0, dp(8));
+                content.addView(row, rlp);
+                column = 0;
+            }
+            row.addView(actionTile(titles[i], i < icons.length ? icons[i] : "", i < subtitles.length ? subtitles[i] : "", listeners[i]), gridCellParams(column));
+            column++;
+        }
+        if (row != null && column == 1) {
+            TextView spacer = new TextView(this);
+            row.addView(spacer, gridCellParams(1));
+        }
+    }
+
+    private LinearLayout actionTile(String title, String icon, String subtitle, View.OnClickListener listener) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setGravity(Gravity.CENTER_VERTICAL);
+        tile.setPadding(dp(12), dp(10), dp(12), dp(10));
+        tile.setBackground(roundedBg(CARD_BG, LINE, 12));
+        tile.setElevation(dp(1));
+        TextView i = new TextView(this);
+        i.setText(iconForTitle(title, icon));
+        i.setTextColor(buttonColorForText(title));
+        i.setTextSize(20);
+        i.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(INK);
+        t.setTextSize(14);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView s = new TextView(this);
+        s.setText(subtitle);
+        s.setTextColor(MUTED);
+        s.setTextSize(12);
+        tile.addView(i);
+        tile.addView(t);
+        tile.addView(s);
+        tile.setClickable(true);
+        tile.setOnClickListener(listener);
+        return tile;
+    }
+
+    private LinearLayout.LayoutParams gridCellParams(int column) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+        lp.setMargins(column == 0 ? 0 : dp(4), 0, column == 0 ? dp(4) : 0, 0);
+        return lp;
+    }
+
+    private void addCompactAlert(String message, String status, View.OnClickListener listener) {
+        addCard(statusBadge(status), message, listener == null ? null : "Review", listener);
+    }
+
+    private void addClientCard(String name, String status, String id, String phone, String address, String collector, int activeLoans, double outstanding, String[] actions, View.OnClickListener[] listeners) {
+        LinearLayout card = modernCard(status);
+        card.addView(titleStatusRow(safe(name).isEmpty() ? "Borrower" : name, status));
+        card.addView(valueBlock("Outstanding", peso(outstanding), outstanding > 0 ? ORANGE : GREEN));
+        card.addView(detailText("Client ID: " + safe(id) +
+                "\nContact: " + fallback(phone, "No phone") +
+                "\nAddress: " + fallback(address, "No address") +
+                "\nActive Loans: " + activeLoans));
+        card.addView(chipText("Collector: " + fallback(collector, "Unassigned"), NAVY));
+        addActionRow(card, actions, listeners);
+        addCardToContent(card);
+    }
+
+    private void addLoanCard(String loanId, String borrower, String status, double principal, double totalPayable, double balance, String nextDue, String collector, String released, String terms, String[] actions, View.OnClickListener[] listeners) {
+        LinearLayout card = modernCard(status);
+        card.addView(titleStatusRow("Loan " + safe(loanId), status));
+        card.addView(detailText("Borrower: " + safe(borrower)));
+        card.addView(valueBlock("Balance", peso(balance), balance > 0 ? ORANGE : GREEN));
+        card.addView(detailText("Principal: " + peso(principal) +
+                "\nTotal Payable: " + peso(totalPayable) +
+                "\nNext Due: " + fallback(nextDue, "Not set") +
+                "\nReleased: " + fallback(released, "Not set") +
+                "\nTerms: " + fallback(terms, "Not set")));
+        card.addView(chipText("Collector: " + fallback(collector, "Unassigned"), NAVY));
+        addActionRow(card, actions, listeners);
+        addCardToContent(card);
+    }
+
+    private LinearLayout modernCard(String status) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackground(roundedBg(statusColor(status), LINE, 12));
+        card.setElevation(dp(2));
+        View accent = new View(this);
+        accent.setBackgroundColor(statusAccentColor(status));
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, dp(3));
+        alp.setMargins(0, 0, 0, dp(10));
+        card.addView(accent, alp);
+        return card;
+    }
+
+    private LinearLayout titleStatusRow(String title, String status) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(INK);
+        t.setTextSize(17);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView badge = statusPill(status);
+        row.addView(badge);
+        return row;
+    }
+
+    private TextView statusPill(String status) {
+        TextView v = new TextView(this);
+        v.setText(statusBadge(status));
+        v.setTextColor(0xffffffff);
+        v.setTextSize(11);
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setGravity(Gravity.CENTER);
+        v.setPadding(dp(8), dp(4), dp(8), dp(4));
+        v.setBackground(roundedBg(statusAccentColor(status), 0, 20));
+        return v;
+    }
+
+    private TextView valueBlock(String label, String value, int accent) {
+        TextView v = new TextView(this);
+        v.setText(label + "\n" + value);
+        v.setTextColor(INK);
+        v.setTextSize(18);
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setPadding(dp(10), dp(8), dp(10), dp(8));
+        v.setBackground(roundedBg(0xffffffff, accent, 10));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(8), 0, dp(8));
+        v.setLayoutParams(lp);
+        return v;
+    }
+
+    private TextView detailText(String body) {
+        TextView v = new TextView(this);
+        v.setText(body);
+        v.setTextColor(MUTED);
+        v.setTextSize(13);
+        v.setPadding(0, 0, 0, dp(8));
+        return v;
+    }
+
+    private TextView chipText(String text, int color) {
+        TextView v = new TextView(this);
+        v.setText(text);
+        v.setTextColor(color);
+        v.setTextSize(12);
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setPadding(dp(8), dp(5), dp(8), dp(5));
+        v.setBackground(roundedBg(0xffeef2ff, LINE, 18));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.setMargins(0, 0, 0, dp(8));
+        v.setLayoutParams(lp);
+        return v;
+    }
+
+    private void addActionRow(LinearLayout card, String[] actions, View.OnClickListener[] listeners) {
+        if (actions == null || listeners == null) return;
+        HorizontalScrollView scroller = new HorizontalScrollView(this);
+        scroller.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < actions.length && i < listeners.length; i++) {
+            if (actions[i] == null || listeners[i] == null) continue;
+            Button b = compactButton(actionLabel(actions[i]), buttonColorForText(actions[i]), listeners[i]);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(36));
+            lp.setMargins(0, 0, dp(6), 0);
+            row.addView(b, lp);
+        }
+        scroller.addView(row);
+        card.addView(scroller);
+    }
+
+    private void addCardToContent(LinearLayout card) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, 0, 0, dp(8));
+        content.addView(card, lp);
+    }
+
     private void addMetric(String label, String value) {
         TextView v = new TextView(this);
         v.setText(label + "\n" + value);
@@ -4440,10 +5127,31 @@ public class MainActivity extends Activity {
         v.setTextSize(18);
         v.setTypeface(Typeface.DEFAULT_BOLD);
         v.setPadding(dp(14), dp(12), dp(14), dp(12));
-        v.setBackgroundColor(0xffffffff);
+        v.setBackground(roundedBg(CARD_BG, LINE, 12));
+        v.setElevation(dp(1));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(8));
         content.addView(v, lp);
+    }
+
+    private void addSmartMetricCard(String label, String value, String description, String status, View.OnClickListener listener) {
+        String body = value + "\n" + description + "\n" + statusBadge(status);
+        addCard(label, body, listener == null ? null : "Open", listener);
+    }
+
+    private void addDashboardAlert(String message, String status, View.OnClickListener listener) {
+        addCard(statusBadge(status), message, listener == null ? null : "Review", listener);
+    }
+
+    private void addAdminDashboardAlerts() {
+        int missingSchedule = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans l LEFT JOIN schedule s ON s.loan_id=l.loan_id WHERE s.loan_id IS NULL AND l.status!='Cancelled'", null);
+        int paymentsReview = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM repayments WHERE amount<=0 OR COALESCE(payment_date,'')=''", null);
+        int importWarnings = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM audit_logs WHERE (action LIKE '%import%' OR action LIKE '%Google Sheet%') AND (details LIKE '%warnings=%' OR details LIKE '%errors=%')", null);
+        int recentBackups = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM audit_logs WHERE action LIKE '%backup created%' AND created_at>=datetime('now','-7 day')", null);
+        addDashboardAlert(missingSchedule > 0 ? missingSchedule + " loan(s) missing schedule" : "All active loans have schedules", missingSchedule > 0 ? "Due Soon" : "Current", new View.OnClickListener() { public void onClick(View v) { showMismatchDetails("Loans without schedule"); }});
+        addDashboardAlert(paymentsReview > 0 ? paymentsReview + " payment(s) need review" : "No payment records need review", paymentsReview > 0 ? "Due Soon" : "Current", null);
+        addDashboardAlert(importWarnings > 0 ? "Import validation/audit warnings found" : "No recent import warnings found", importWarnings > 0 ? "Due Soon" : "Current", new View.OnClickListener() { public void onClick(View v) { showImportSummaryHistory(); }});
+        addDashboardAlert(recentBackups > 0 ? "Encrypted backup created recently" : "Backup not created recently", recentBackups > 0 ? "Current" : "Due Soon", new View.OnClickListener() { public void onClick(View v) { showBackupDataDialog(); }});
     }
 
     private void addSection(String label) {
@@ -4459,9 +5167,7 @@ public class MainActivity extends Activity {
     private void addAction(String label, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(label);
-        b.setAllCaps(false);
-        b.setTextColor(0xffffffff);
-        b.setBackgroundColor(ORANGE);
+        styleButton(b, ORANGE);
         b.setOnClickListener(listener);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(46));
         lp.setMargins(0, 0, 0, dp(8));
@@ -4472,6 +5178,10 @@ public class MainActivity extends Activity {
         addCard(title, body, "Open", listener);
     }
 
+    private void addMenuGroup(String title, String body, String[] actions, View.OnClickListener[] listeners) {
+        addCard(title, body, actions, listeners);
+    }
+
     private void addCard(String title, String body, String action, View.OnClickListener listener) {
         addCard(title, body, action == null ? null : new String[]{action}, listener == null ? null : new View.OnClickListener[]{listener});
     }
@@ -4479,12 +5189,18 @@ public class MainActivity extends Activity {
     private void addCard(String title, String body, String[] actions, View.OnClickListener[] listeners) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(10), dp(12), dp(10));
-        card.setBackgroundColor(statusColor(title + "\n" + body));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackground(roundedBg(statusColor(title + "\n" + body), LINE, 12));
+        card.setElevation(dp(2));
+        View accent = new View(this);
+        accent.setBackgroundColor(statusAccentColor(title + "\n" + body));
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, dp(3));
+        alp.setMargins(0, 0, 0, dp(8));
+        card.addView(accent, alp);
         TextView t = new TextView(this);
         t.setText(title);
         t.setTextColor(INK);
-        t.setTextSize(16);
+        t.setTextSize(17);
         t.setTypeface(Typeface.DEFAULT_BOLD);
         TextView b = new TextView(this);
         b.setText(body);
@@ -4496,11 +5212,9 @@ public class MainActivity extends Activity {
         if (actions != null && listeners != null) {
             for (int i = 0; i < actions.length && i < listeners.length; i++) {
                 if (actions[i] == null || listeners[i] == null) continue;
-            Button button = new Button(this);
+                Button button = new Button(this);
                 button.setText(actions[i]);
-            button.setAllCaps(false);
-            button.setTextColor(0xffffffff);
-            button.setBackgroundColor(BLUE);
+                styleButton(button, buttonColorForText(actions[i]));
                 button.setOnClickListener(listeners[i]);
                 LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, dp(44));
                 blp.setMargins(0, dp(8), 0, 0);
@@ -4519,7 +5233,8 @@ public class MainActivity extends Activity {
         e.setTextColor(MUTED);
         e.setGravity(Gravity.CENTER);
         e.setPadding(dp(12), dp(24), dp(12), dp(24));
-        e.setBackgroundColor(LINE);
+        e.setBackground(roundedBg(0xffeef2f7, LINE, 12));
+        e.setElevation(dp(1));
         content.addView(e);
     }
 
@@ -4530,12 +5245,46 @@ public class MainActivity extends Activity {
         return f;
     }
 
+    private TextView formNote(String text) {
+        TextView v = new TextView(this);
+        v.setText(text);
+        v.setTextColor(MUTED);
+        v.setTextSize(13);
+        v.setPadding(dp(4), 0, dp(4), dp(10));
+        return v;
+    }
+
+    private TextView formStep(String step, String title) {
+        TextView v = new TextView(this);
+        v.setText(step + " - " + title);
+        v.setTextColor(NAVY);
+        v.setTextSize(15);
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setPadding(dp(4), dp(12), dp(4), dp(6));
+        return v;
+    }
+
+    private TextView formSummaryCard(String text) {
+        TextView v = new TextView(this);
+        v.setText(text);
+        v.setTextColor(INK);
+        v.setTextSize(13);
+        v.setPadding(dp(10), dp(10), dp(10), dp(10));
+        v.setBackground(roundedBg(0xffeff6ff, LINE, 12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(4), 0, dp(8));
+        v.setLayoutParams(lp);
+        return v;
+    }
+
     private EditText input(String hint) {
         EditText e = new EditText(this);
         e.setHint(hint);
         e.setSingleLine(false);
         e.setTextSize(15);
         e.setPadding(dp(10), dp(8), dp(10), dp(8));
+        e.setTextColor(INK);
+        e.setHintTextColor(MUTED);
         return e;
     }
 
@@ -4555,10 +5304,109 @@ public class MainActivity extends Activity {
         String s = safe(text).toLowerCase(Locale.US);
         if (s.contains("cancelled") || s.contains("voided") || s.contains("void -")) return 0xfffff1f2;
         if (s.contains("overdue")) return 0xfffff7ed;
+        if (s.contains("due today")) return 0xfffffbeb;
         if (s.contains("due soon")) return 0xfffffbeb;
         if (s.contains("paid") || s.contains("fully paid")) return 0xffecfdf5;
         if (s.contains("active") || s.contains("current") || s.contains("valid")) return 0xffeff6ff;
         return 0xffffffff;
+    }
+
+    private int statusAccentColor(String text) {
+        String s = safe(text).toLowerCase(Locale.US);
+        if (s.contains("cancelled") || s.contains("voided") || s.contains("overdue") || s.contains("void -")) return RED;
+        if (s.contains("due today") || s.contains("due soon")) return AMBER;
+        if (s.contains("paid") || s.contains("fully paid") || s.contains("current") || s.contains("valid")) return GREEN;
+        if (s.contains("active")) return BLUE;
+        return LINE;
+    }
+
+    private int buttonColorForText(String text) {
+        String s = safe(text).toLowerCase(Locale.US);
+        if (s.contains("cancel") || s.contains("void") || s.contains("restore")) return RED;
+        if (s.contains("backup") || s.contains("paid") || s.contains("collect") || s.contains("post")) return GREEN;
+        if (s.contains("import") || s.contains("warning") || s.contains("recalc")) return AMBER;
+        return NAVY;
+    }
+
+    private String iconForTitle(String title, String fallbackIcon) {
+        if (!safe(fallbackIcon).isEmpty()) return fallbackIcon;
+        String s = safe(title).toLowerCase(Locale.US);
+        if (s.contains("client") || s.contains("borrower")) return "👥";
+        if (s.contains("loan")) return "▤";
+        if (s.contains("payment") || s.contains("collect")) return "₱";
+        if (s.contains("report")) return "▥";
+        if (s.contains("backup")) return "⬇";
+        if (s.contains("commission")) return "%";
+        if (s.contains("admin")) return "⚙";
+        if (s.contains("search")) return "⌕";
+        if (s.contains("print")) return "⎙";
+        return "•";
+    }
+
+    private String actionLabel(String action) {
+        String s = safe(action);
+        if ("Release loan".equalsIgnoreCase(s)) return "Release";
+        if ("Post Payment".equalsIgnoreCase(s)) return "Collect";
+        if ("Print Form".equalsIgnoreCase(s)) return "Form";
+        if ("Void payment".equalsIgnoreCase(s)) return "Void";
+        return s;
+    }
+
+    private GradientDrawable roundedBg(int fill, int stroke, int radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(fill);
+        g.setCornerRadius(dp(radiusDp));
+        if (stroke != 0) g.setStroke(dp(1), stroke);
+        return g;
+    }
+
+    private void styleButton(Button b, int color) {
+        b.setAllCaps(false);
+        b.setTextColor(0xffffffff);
+        b.setTextSize(14);
+        b.setBackground(roundedBg(color, 0, 10));
+        b.setPadding(dp(10), 0, dp(10), 0);
+    }
+
+    private Button methodChip(final String label, final EditText target) {
+        Button b = new Button(this);
+        b.setText(label);
+        styleButton(b, "Cash".equals(label) ? GREEN : NAVY);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(40));
+        lp.setMargins(0, 0, 0, dp(6));
+        b.setLayoutParams(lp);
+        b.setOnClickListener(v -> target.setText(label));
+        return b;
+    }
+
+    private Button compactButton(String label, int color, View.OnClickListener listener) {
+        Button b = new Button(this);
+        b.setText(label);
+        styleButton(b, color);
+        b.setOnClickListener(listener);
+        return b;
+    }
+
+    private String backupStatusText() {
+        if (!isAdmin()) return "Ask Admin to create encrypted backups regularly";
+        int recentBackups = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM audit_logs WHERE action LIKE '%backup created%' AND created_at>=datetime('now','-7 day')", null);
+        return recentBackups > 0 ? "Encrypted backup created recently" : "No recent encrypted backup";
+    }
+
+    private String loanSummaryForPayment(String loanId) {
+        if (safe(loanId).trim().isEmpty()) return "Loan summary appears after choosing a loan and is confirmed before posting.";
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT client_name,loan_id,balance,next_due_date,collector,status FROM loans WHERE loan_id=?", new String[]{loanId});
+        try {
+            if (!c.moveToFirst()) return "Loan summary appears after choosing a valid active loan.";
+            return "Selected Loan\nBorrower: " + safe(c.getString(0)) +
+                    "\nLoan: " + safe(c.getString(1)) +
+                    "\nBalance: " + peso(c.getDouble(2)) +
+                    "\nNext Due: " + safe(c.getString(3)) +
+                    "\nCollector: " + safe(c.getString(4)) +
+                    "\nStatus: " + statusBadge(c.getString(5));
+        } finally {
+            c.close();
+        }
     }
 
     private String statusLine(String status) {
@@ -4567,12 +5415,29 @@ public class MainActivity extends Activity {
         return "Status: " + s.toUpperCase(Locale.US);
     }
 
+    private String statusBadge(String status) {
+        String s = safe(status).trim();
+        if (s.isEmpty()) return "STATUS: NOT SET";
+        String lower = s.toLowerCase(Locale.US);
+        if (lower.contains("due today")) return "DUE TODAY";
+        if (lower.contains("due soon")) return "DUE SOON";
+        if (lower.contains("overdue")) return "OVERDUE";
+        if (lower.contains("paid")) return "PAID";
+        if (lower.contains("cancel")) return "CANCELLED";
+        if (lower.contains("void")) return "VOIDED";
+        if (lower.contains("active") || lower.contains("current") || lower.contains("valid")) return "ACTIVE";
+        return s.toUpperCase(Locale.US);
+    }
+
     private String friendlyEmpty(String msg) {
         String s = safe(msg);
         String lower = s.toLowerCase(Locale.US);
         if (lower.contains("no clients")) return "No clients yet. Add a client to begin tracking borrowers.";
         if (lower.contains("no loans")) return "No loans found. Try clearing search or release a new loan.";
         if (lower.contains("payment history") || lower.contains("no payments")) return "No payments yet for this borrower or loan.";
+        if (lower.contains("no released loans")) return "No released loans found for this filter.";
+        if (lower.contains("no records")) return "No records found for this filter.";
+        if (lower.contains("no valid payments")) return "No payment records found for this filter.";
         if (lower.contains("overdue")) return "No overdue accounts. Nice and tidy.";
         if (lower.contains("commission")) return "No commission available yet.";
         return s;
@@ -4581,6 +5446,7 @@ public class MainActivity extends Activity {
     private boolean blank(EditText e) { return text(e).trim().isEmpty(); }
     private String text(EditText e) { return e.getText().toString().trim(); }
     private String safe(String s) { return s == null ? "" : s; }
+    private String fallback(String s, String value) { return safe(s).trim().isEmpty() ? value : s; }
     private String peso(double n) { return money.format(n).replace("PHP", "PHP "); }
     private String h(String s) {
         return safe(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");

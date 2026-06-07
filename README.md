@@ -35,6 +35,93 @@ Change or replace this account before real production use.
 
 The project uses Android Gradle Plugin `8.5.2`, `compileSdk 35`, and no third-party app libraries.
 
+Project release settings:
+
+- App name: `A&L Alalay Loan Tracker`
+- Package/application ID: `com.alalay.loantracker`
+- `versionCode`: `1`
+- `versionName`: `1.0`
+- `minSdk`: `23`
+- `targetSdk`: `35`
+- `compileSdk`: `35`
+- `android:allowBackup`: `false`
+- Launcher icon: `app/src/main/res/drawable/ic_launcher.xml` placeholder
+- Gradle compileSdk warning suppression: `android.suppressUnsupportedCompileSdk=35`
+
+## APK Builds and Install
+
+Before building an APK for real use, create an encrypted backup from inside the app and keep the passphrase safe.
+
+Create another encrypted backup before updating the app, before restoring from any backup, and before importing CSV files.
+
+Debug APK for testing:
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+.\gradlew.bat :app:assembleDebug
+```
+
+Debug output:
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+Release APK:
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+.\gradlew.bat :app:assembleRelease
+```
+
+Release output:
+
+```text
+app/build/outputs/apk/release/
+```
+
+If Gradle produces an unsigned release APK, sign it with Android Studio or a private local signing config before installing it for daily use.
+
+Signing notes:
+
+- Debug APKs are only for testing.
+- A release APK should be signed with a private Android signing key in Android Studio or a local signing config.
+- Do not commit `.jks`, `.keystore`, `keystore.properties`, or signing passwords.
+
+Install on a phone:
+
+1. Copy the APK to the phone, or use Android Studio/ADB.
+2. If installing manually, allow installation from the selected file manager only when prompted.
+3. Install the APK.
+4. Login and run `Admin Checks > System Check`.
+
+ADB install example:
+
+```powershell
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+## Final Test Checklist
+
+Use `Help > Help / Quick Guide` and `Admin Checks > Release Readiness Checklist` before real daily use.
+
+Minimum checks:
+
+- Login/logout for Admin, Cashier, Collector, and Viewer.
+- Change the default Admin password.
+- Add/edit client.
+- Release loan and verify schedule.
+- Post payment and print receipt.
+- View payment history.
+- Void payment and confirm balance/audit updates.
+- Cancel loan and confirm schedule cleanup.
+- Run reports and print/save PDF outputs.
+- Verify commission earning, release, and recalculation.
+- Test CSV import, Import Validation, and Dashboard Reference comparison.
+- Create and restore encrypted backup on a test device/profile.
+- Confirm role restrictions.
+- Open the dashboard as Admin, Cashier, Collector, and Viewer and confirm KPI cards, quick actions, alerts, client cards, and loan cards fit on the phone screen.
+
 ## Setup on Another Computer
 
 1. Install Android Studio.
