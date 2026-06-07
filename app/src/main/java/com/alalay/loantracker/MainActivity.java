@@ -66,17 +66,22 @@ import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class MainActivity extends Activity {
-    private static final int BLUE = 0xff000f96;
-    private static final int ORANGE = 0xfff15a24;
-    private static final int NAVY = 0xff0b1f4d;
-    private static final int GREEN = 0xff16a34a;
+    private static final int BLUE = 0xff123c7c;
+    private static final int ORANGE = 0xffd97706;
+    private static final int NAVY = 0xff071b3a;
+    private static final int TEAL = 0xff0f766e;
+    private static final int GOLD = 0xffd9a441;
+    private static final int GREEN = 0xff15803d;
     private static final int AMBER = 0xfff59e0b;
     private static final int RED = 0xffdc2626;
-    private static final int INK = 0xff0f172a;
+    private static final int INK = 0xff0b1220;
     private static final int MUTED = 0xff64748b;
-    private static final int LINE = 0xffdbe3ef;
-    private static final int APP_BG = 0xfff4f7fb;
+    private static final int LINE = 0xffd7e0ec;
+    private static final int APP_BG = 0xfff5f8fc;
     private static final int CARD_BG = 0xffffffff;
+    private static final int BRAND_TINT = 0xffe8f2ff;
+    private static final int TEAL_TINT = 0xffe6fffb;
+    private static final int GOLD_TINT = 0xfffff7df;
     private static final Locale PH = new Locale("en", "PH");
     private static final SimpleDateFormat ISO = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
     private static final String[] COLLECTOR_NAMES = new String[]{"LEO PELIN", "SHEGFRED CABANA", "RASHIEM MORATA", "EHVAN PABUAYA"};
@@ -86,6 +91,22 @@ public class MainActivity extends Activity {
     private static final String[] ROLE_OPTIONS = new String[]{"Admin", "Cashier", "Collector", "Viewer"};
     private static final String[] ACTIVE_OPTIONS = new String[]{"Active", "Inactive"};
     private static final String[] LEDGER_STATUS_OPTIONS = new String[]{"Available", "Released", "Held", "Reversed"};
+    private static final String NAV_HOME_KEY = "home";
+    private static final String NAV_CLIENTS_KEY = "clients";
+    private static final String NAV_LOANS_KEY = "loans";
+    private static final String NAV_COLLECT_KEY = "collect";
+    private static final String NAV_REPORTS_KEY = "reports";
+    private static final String NAV_MENU_KEY = "menu";
+    private static final String NAV_PROFILE_KEY = "profile";
+    private static final String NAV_HELP_KEY = "help";
+    private static final String NAV_HOME_KEY = "home";
+    private static final String NAV_CLIENTS_KEY = "clients";
+    private static final String NAV_LOANS_KEY = "loans";
+    private static final String NAV_COLLECT_KEY = "collect";
+    private static final String NAV_REPORTS_KEY = "reports";
+    private static final String NAV_MENU_KEY = "menu";
+    private static final String NAV_PROFILE_KEY = "profile";
+    private static final String NAV_HELP_KEY = "help";
     private static final int REQ_RESTORE_JSON = 501;
     private static final int REQ_IMPORT_CSV = 502;
     private static final int REQ_ATTACH_CLIENT_PHOTO = 503;
@@ -107,6 +128,12 @@ public class MainActivity extends Activity {
     private Runnable currentScreenReturnAction;
     private Runnable printablePreviewReturnAction;
     private boolean printablePreviewOpen = false;
+    private final Map<String, Button> topNavButtons = new HashMap<>();
+    private final Map<String, Button> bottomNavButtons = new HashMap<>();
+    private String activeNavKey = NAV_HOME_KEY;
+    private final Map<String, Button> topNavButtons = new HashMap<>();
+    private final Map<String, Button> bottomNavButtons = new HashMap<>();
+    private String activeNavKey = NAV_HOME_KEY;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -205,34 +232,56 @@ public class MainActivity extends Activity {
         currentUser = null;
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(24), dp(36), dp(24), dp(24));
-        root.setBackgroundColor(APP_BG);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(20), dp(28), dp(20), dp(20));
+        root.setBackground(brandGradient());
 
-        TextView title = new TextView(this);
-        title.setText("A&L Alalay Loan Tracker");
-        title.setTextColor(BLUE);
-        title.setTextSize(24);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setPadding(0, 0, 0, dp(8));
-        root.addView(title);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(20), dp(20), dp(20), dp(18));
+        card.setBackground(roundedBg(CARD_BG, 0x22ffffff, 22));
+        card.setElevation(dp(8));
+        card.addView(brandLogoView(false, false));
 
         TextView note = new TextView(this);
-        note.setText("Login required. Temporary first login: admin / admin123");
+        note.setText("Secure Microlending Management");
         note.setTextColor(MUTED);
-        note.setTextSize(14);
-        note.setPadding(0, 0, 0, dp(16));
-        root.addView(note);
+        note.setTextSize(13);
+        note.setGravity(Gravity.CENTER);
+        note.setPadding(0, dp(8), 0, dp(18));
+        card.addView(note);
 
         final EditText username = input("Username");
         final EditText password = input("Password");
+        username.setSingleLine(true);
+        password.setSingleLine(true);
         password.setInputType(0x00000081);
-        root.addView(username);
-        root.addView(password);
+        username.setBackground(roundedBg(0xfff8fbff, LINE, 12));
+        password.setBackground(roundedBg(0xfff8fbff, LINE, 12));
+        card.addView(username, loginFieldParams());
+        card.addView(password, loginFieldParams());
+
+        Button togglePassword = new Button(this);
+        togglePassword.setText("Show Password");
+        togglePassword.setAllCaps(false);
+        togglePassword.setTextSize(12);
+        togglePassword.setTextColor(TEAL);
+        togglePassword.setBackground(roundedBg(TEAL_TINT, 0, 12));
+        final boolean[] showingPassword = new boolean[]{false};
+        togglePassword.setOnClickListener(v -> {
+            showingPassword[0] = !showingPassword[0];
+            password.setInputType(showingPassword[0] ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD : 0x00000081);
+            password.setSelection(password.getText().length());
+            togglePassword.setText(showingPassword[0] ? "Hide Password" : "Show Password");
+        });
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, dp(38));
+        tlp.setMargins(0, 0, 0, dp(10));
+        card.addView(togglePassword, tlp);
 
         Button login = new Button(this);
-        login.setText("Login");
+        login.setText("Sign In");
         styleButton(login, NAVY);
-        root.addView(login, new LinearLayout.LayoutParams(-1, dp(48)));
+        card.addView(login, new LinearLayout.LayoutParams(-1, dp(48)));
         login.setOnClickListener(v -> {
             if (!databaseReady) {
                 toast("Database is still preparing. Please wait a moment.");
@@ -251,22 +300,32 @@ public class MainActivity extends Activity {
                 showChangePasswordDialog(true);
             }
         });
+
+        TextView footer = new TextView(this);
+        footer.setText("Admin creates accounts. Use password reset if access is lost.");
+        footer.setTextColor(MUTED);
+        footer.setGravity(Gravity.CENTER);
+        footer.setTextSize(12);
+        footer.setPadding(0, dp(14), 0, 0);
+        card.addView(footer);
+
+        root.addView(card, new LinearLayout.LayoutParams(-1, -2));
         setContentView(root);
     }
 
     private void buildShell() {
+        topNavButtons.clear();
+        bottomNavButtons.clear();
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(APP_BG);
 
-        TextView title = new TextView(this);
-        title.setText("A&L Alalay");
-        title.setTextColor(0xffffffff);
-        title.setTextSize(20);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setPadding(dp(16), dp(14), dp(16), dp(10));
-        title.setBackgroundColor(NAVY);
-        root.addView(title);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(12), dp(10), dp(12), dp(10));
+        header.setBackground(brandGradient());
+        header.addView(brandLogoView(true, true));
+        root.addView(header);
 
         HorizontalScrollView scroller = new HorizontalScrollView(this);
         scroller.setHorizontalScrollBarEnabled(false);
@@ -320,9 +379,11 @@ public class MainActivity extends Activity {
         b.setText(text);
         b.setAllCaps(false);
         b.setTextSize(11);
-        b.setTextColor(NAVY);
-        b.setBackground(roundedBg(0xfff8fafc, LINE, 10));
+        String key = navKeyForLabel(text);
+        b.setTypeface(Typeface.DEFAULT);
         b.setOnClickListener(listener);
+        if (!key.isEmpty()) bottomNavButtons.put(key, b);
+        styleBottomNavButton(b, key.equals(activeNavKey));
         return b;
     }
 
@@ -330,12 +391,108 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(text);
         b.setTextSize(13);
-        styleButton(b, NAVY);
+        b.setAllCaps(false);
+        String key = navKeyForLabel(text);
         b.setOnClickListener(listener);
+        if (!key.isEmpty()) topNavButtons.put(key, b);
+        styleTopNavButton(b, key.equals(activeNavKey));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(38));
         lp.setMargins(dp(4), 0, dp(4), 0);
         b.setLayoutParams(lp);
         return b;
+    }
+
+    private String navKeyForLabel(String label) {
+        String s = safe(label).toLowerCase(Locale.US);
+        if (s.contains("home")) return NAV_HOME_KEY;
+        if (s.contains("client")) return NAV_CLIENTS_KEY;
+        if (s.contains("loan") || s.contains("passbook")) return NAV_LOANS_KEY;
+        if (s.contains("collect") || s.contains("schedule")) return NAV_COLLECT_KEY;
+        if (s.contains("report")) return NAV_REPORTS_KEY;
+        if (s.contains("menu")) return NAV_MENU_KEY;
+        if (s.contains("profile")) return NAV_PROFILE_KEY;
+        if (s.contains("help")) return NAV_HELP_KEY;
+        return "";
+    }
+
+    private void setActiveNav(String key) {
+        activeNavKey = safe(key).isEmpty() ? NAV_HOME_KEY : key;
+        refreshNavActiveStates();
+    }
+
+    private void refreshNavActiveStates() {
+        for (Map.Entry<String, Button> e : topNavButtons.entrySet()) styleTopNavButton(e.getValue(), e.getKey().equals(activeNavKey));
+        for (Map.Entry<String, Button> e : bottomNavButtons.entrySet()) styleBottomNavButton(e.getValue(), e.getKey().equals(activeNavKey));
+    }
+
+    private void styleTopNavButton(Button b, boolean active) {
+        b.setTextColor(active ? 0xffffffff : 0xffcbd5e1);
+        b.setTypeface(Typeface.DEFAULT, active ? Typeface.BOLD : Typeface.NORMAL);
+        b.setBackground(roundedBg(active ? TEAL : 0x22ffffff, active ? GOLD : 0x33ffffff, 14));
+    }
+
+    private void styleBottomNavButton(Button b, boolean active) {
+        b.setTextColor(active ? 0xffffffff : MUTED);
+        b.setTypeface(Typeface.DEFAULT, active ? Typeface.BOLD : Typeface.NORMAL);
+        b.setBackground(roundedBg(active ? NAVY : 0xfff8fafc, active ? GOLD : LINE, 12));
+    }
+
+    private GradientDrawable brandGradient() {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{NAVY, BLUE, TEAL});
+        g.setCornerRadius(0);
+        return g;
+    }
+
+    private LinearLayout.LayoutParams loginFieldParams() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48));
+        lp.setMargins(0, 0, 0, dp(10));
+        return lp;
+    }
+
+    private LinearLayout brandLogoView(boolean dark, boolean compact) {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.HORIZONTAL);
+        wrap.setGravity(Gravity.CENTER_VERTICAL);
+        wrap.setPadding(0, 0, 0, 0);
+
+        TextView mark = new TextView(this);
+        mark.setText("A&L");
+        mark.setGravity(Gravity.CENTER);
+        mark.setTextColor(dark ? NAVY : 0xffffffff);
+        mark.setTextSize(compact ? 16 : 22);
+        mark.setTypeface(Typeface.DEFAULT_BOLD);
+        mark.setBackground(roundedBg(dark ? GOLD : NAVY, dark ? 0x55ffffff : GOLD, compact ? 14 : 18));
+        wrap.addView(mark, new LinearLayout.LayoutParams(compact ? dp(48) : dp(68), compact ? dp(48) : dp(68)));
+
+        LinearLayout word = new LinearLayout(this);
+        word.setOrientation(LinearLayout.VERTICAL);
+        word.setPadding(dp(10), 0, 0, 0);
+        TextView name = new TextView(this);
+        name.setText("A&L Alalay");
+        name.setTextColor(dark ? 0xffffffff : NAVY);
+        name.setTextSize(compact ? 19 : 26);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView sub = new TextView(this);
+        sub.setText("Microlending Services");
+        sub.setTextColor(dark ? 0xffdbeafe : MUTED);
+        sub.setTextSize(compact ? 12 : 14);
+        word.addView(name);
+        word.addView(sub);
+        wrap.addView(word, new LinearLayout.LayoutParams(0, -2, 1));
+
+        if (compact && currentUser != null) {
+            TextView role = new TextView(this);
+            role.setText(currentUser.role);
+            role.setTextColor(0xffffffff);
+            role.setTextSize(11);
+            role.setTypeface(Typeface.DEFAULT_BOLD);
+            role.setGravity(Gravity.CENTER);
+            role.setPadding(dp(8), dp(4), dp(8), dp(4));
+            role.setBackground(roundedBg(0x332dd4bf, 0x55ffffff, 18));
+            wrap.addView(role);
+        }
+        return wrap;
     }
 
     private void clear(String heading) {
@@ -343,7 +500,7 @@ public class MainActivity extends Activity {
         TextView h = new TextView(this);
         h.setText(heading);
         h.setTextColor(INK);
-        h.setTextSize(22);
+        h.setTextSize(21);
         h.setTypeface(Typeface.DEFAULT_BOLD);
         h.setPadding(0, 0, 0, dp(10));
         content.addView(h);
@@ -355,7 +512,7 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setTextSize(13);
         b.setTextColor(NAVY);
-        b.setBackground(roundedBg(0xffeff6ff, LINE, 10));
+        b.setBackground(roundedBg(BRAND_TINT, LINE, 12));
         b.setOnClickListener(listener);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(42));
         lp.setMargins(0, 0, 0, dp(10));
@@ -364,6 +521,7 @@ public class MainActivity extends Activity {
 
     private void showDashboard() {
         if (isViewer()) { showClientPortalDashboard(); return; }
+        setActiveNav(NAV_HOME_KEY);
         rememberScreen(new Runnable() { public void run() { showDashboard(); }});
         clear("A&L Alalay");
         SQLiteDatabase r = db.getReadableDatabase();
@@ -444,6 +602,7 @@ public class MainActivity extends Activity {
 
     private void showMainMenu() {
         if (isViewer()) { showClientPortalDashboard(); return; }
+        setActiveNav(NAV_MENU_KEY);
         clear("Menu");
         if (canPostPayment() || canViewPaymentHistory()) {
             addMenuGroup("Daily Operations", "Fast actions for today's work.",
@@ -495,6 +654,7 @@ public class MainActivity extends Activity {
 
     private void showMyProfile() {
         if (currentUser == null) { showLoginScreen(); return; }
+        setActiveNav(NAV_PROFILE_KEY);
         if (isViewer()) {
             showClientPortalDashboard();
             return;
@@ -549,6 +709,7 @@ public class MainActivity extends Activity {
     }
 
     private void showClientPortalDashboard() {
+        setActiveNav(NAV_HOME_KEY);
         rememberScreen(new Runnable() { public void run() { showClientPortalDashboard(); }});
         clear("Client Portal");
         String clientId = viewerClientId();
@@ -595,6 +756,7 @@ public class MainActivity extends Activity {
 
     private void showAdminChecks() {
         if (!requireAdmin()) return;
+        setActiveNav(NAV_MENU_KEY);
         rememberScreen(new Runnable() { public void run() { showAdminChecks(); }});
         clear("Admin Checks");
         addMenuGroup("System Tools", "Integrity checks, release testing, and audit trail review.",
@@ -958,6 +1120,7 @@ public class MainActivity extends Activity {
     }
 
     private void showHelpGuide() {
+        setActiveNav(NAV_HELP_KEY);
         clear("Help / Quick Guide");
         addAction("Back to Menu", new View.OnClickListener() { public void onClick(View v) { showMainMenu(); }});
         addCard("Recommended Workflow",
@@ -2327,6 +2490,7 @@ public class MainActivity extends Activity {
 
     private void showClients() {
         if (isViewer()) { showClientPortalDashboard(); return; }
+        setActiveNav(NAV_CLIENTS_KEY);
         rememberScreen(new Runnable() { public void run() { showClients(); }});
         clear("Clients");
         if (canAddClient()) addAction("Add Client", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
@@ -2374,6 +2538,7 @@ public class MainActivity extends Activity {
 
     private void showBorrowerProfile(final String clientId) {
         if (!canAccessClient(clientId)) { notAllowed(); return; }
+        setActiveNav(NAV_CLIENTS_KEY);
         rememberScreen(new Runnable() { public void run() { showBorrowerProfile(clientId); }});
         Cursor c = db.getReadableDatabase().rawQuery("SELECT client_id,name,phone,address,enrolled_date,status,active_loans,total_outstanding,employment,collector,valid_id_no,valid_id_file,photo_file FROM clients WHERE client_id=?", new String[]{clientId});
         try {
@@ -2479,6 +2644,7 @@ public class MainActivity extends Activity {
 
     private void showBorrowerLoanHistory(final String clientId, final String filter) {
         if (!canAccessClient(clientId)) { notAllowed(); return; }
+        setActiveNav(isViewer() ? NAV_LOANS_KEY : NAV_CLIENTS_KEY);
         rememberScreen(new Runnable() { public void run() { showBorrowerLoanHistory(clientId, filter); }});
         clear("Borrower Loan History");
         addBack("Back to Profile", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showBorrowerProfile(clientId); }});
@@ -2529,6 +2695,7 @@ public class MainActivity extends Activity {
     }
 
     private void showLoansFiltered(String filter) {
+        setActiveNav(NAV_LOANS_KEY);
         rememberScreen(new Runnable() { public void run() { showLoansFiltered(filter); }});
         clear("Loans");
         addLoanFilterChips(filter);
@@ -2891,6 +3058,7 @@ public class MainActivity extends Activity {
     }
 
     private void showWeeklyCollection() {
+        setActiveNav(NAV_COLLECT_KEY);
         rememberScreen(new Runnable() { public void run() { showWeeklyCollection(); }});
         clear("Weekly Collection Sheet");
         addAction("Print Collection Sheet", new View.OnClickListener() { public void onClick(View v) { showCollectionSheetPrintDialog(); }});
@@ -2902,6 +3070,7 @@ public class MainActivity extends Activity {
 
     private void showReportsMenu() {
         if (!requirePermission(canViewReports())) return;
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showReportsMenu(); }});
         clear("Reports");
         addMenuGroup("Collection Reports", "Daily and weekly collections with print and CSV options inside each report.",
@@ -2984,6 +3153,7 @@ public class MainActivity extends Activity {
 
     private void showLoanDetails(final String loanId) {
         if (!canAccessLoan(loanId)) { notAllowed(); return; }
+        setActiveNav(NAV_LOANS_KEY);
         rememberScreen(new Runnable() { public void run() { showLoanDetails(loanId); }});
         Cursor c = db.getReadableDatabase().rawQuery("SELECT loan_id,client_name,principal,interest_rate,total_due,balance,term_weeks,weekly_due,release_date,maturity_date,collector,released_thru,status,next_due_date,terms,reference_number FROM loans WHERE loan_id=?", new String[]{loanId});
         try {
@@ -3042,6 +3212,7 @@ public class MainActivity extends Activity {
 
     private void showRepaymentSchedule(final String loanId) {
         if (!canAccessLoan(loanId)) { notAllowed(); return; }
+        setActiveNav(isViewer() ? NAV_COLLECT_KEY : NAV_LOANS_KEY);
         rememberScreen(new Runnable() { public void run() { showRepaymentSchedule(loanId); }});
         Cursor loan = db.getReadableDatabase().rawQuery("SELECT client_name,principal,total_due,term_weeks,balance,status FROM loans WHERE loan_id=?", new String[]{loanId});
         try {
@@ -3239,6 +3410,7 @@ public class MainActivity extends Activity {
     }
 
     private void showDailyCollectionReport(ReportFilter f) {
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showDailyCollectionReport(f); }});
         clear("Daily Collection Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3278,6 +3450,7 @@ public class MainActivity extends Activity {
     }
 
     private void showWeeklyCollectionReport(ReportFilter f) {
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showWeeklyCollectionReport(f); }});
         clear("Weekly Collection Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3317,6 +3490,7 @@ public class MainActivity extends Activity {
 
     private void showOverdueReport(ReportFilter f) {
         if (!canOpenReport("Overdue")) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showOverdueReport(f); }});
         clear("Overdue Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3345,6 +3519,7 @@ public class MainActivity extends Activity {
 
     private void showLoanReleaseReport(ReportFilter f) {
         if (!canOpenReport("Loan Release")) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showLoanReleaseReport(f); }});
         clear("Loan Release Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3374,6 +3549,7 @@ public class MainActivity extends Activity {
 
     private void showFullyPaidLoansReport(ReportFilter f) {
         if (!canOpenReport("Fully Paid Loans")) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showFullyPaidLoansReport(f); }});
         clear("Fully Paid Loans Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3399,6 +3575,7 @@ public class MainActivity extends Activity {
 
     private void showCancelledVoidedReport(ReportFilter f) {
         if (!canOpenReport("Cancelled / Voided")) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showCancelledVoidedReport(f); }});
         clear("Cancelled Loans / Voided Payments");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3441,6 +3618,7 @@ public class MainActivity extends Activity {
 
     private void showCollectorPerformanceReport(ReportFilter f) {
         if (!canOpenReport("Collector Performance")) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showCollectorPerformanceReport(f); }});
         clear("Collector Performance Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3657,6 +3835,7 @@ public class MainActivity extends Activity {
 
     private void showCommissionReleaseHistory(String collectorFilter) {
         if (!canViewCommissionReports()) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showCommissionReleaseHistory(collectorFilter); }});
         clear("Commission Release History");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3680,6 +3859,7 @@ public class MainActivity extends Activity {
 
     private void showCommissionSummaryReport() {
         if (!canViewCommissionReports()) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showCommissionSummaryReport(); }});
         clear("Commission Summary Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3689,6 +3869,7 @@ public class MainActivity extends Activity {
 
     private void showCommissionBalanceReport() {
         if (!canViewCommissionReports()) { notAllowed(); return; }
+        setActiveNav(NAV_REPORTS_KEY);
         rememberScreen(new Runnable() { public void run() { showCommissionBalanceReport(); }});
         clear("Collector Commission Balance Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
@@ -3941,6 +4122,7 @@ public class MainActivity extends Activity {
 
     private void showCollectPaymentDialog(String loan) {
         if (!requirePermission(canPostPayment())) return;
+        setActiveNav(NAV_COLLECT_KEY);
         LinearLayout form = form();
         form.addView(formNote("Post Payment"));
         form.addView(formNote("Pick borrower and active loan first, then confirm the amount before posting."));
@@ -4173,6 +4355,7 @@ public class MainActivity extends Activity {
 
     private void showPaymentHistoryForLoan(String loanId) {
         if (!requirePermission(canViewPaymentHistory())) return;
+        setActiveNav(NAV_COLLECT_KEY);
         rememberScreen(new Runnable() { public void run() { showPaymentHistoryForLoan(loanId); }});
         LoanRow lr = findLoan(loanId);
         if (lr != null && !canAccessLoan(loanId)) { notAllowed(); return; }
@@ -4190,6 +4373,7 @@ public class MainActivity extends Activity {
     private void showPaymentHistoryForClient(String clientId) {
         if (!requirePermission(canViewPaymentHistory())) return;
         if (!canAccessClient(clientId)) { notAllowed(); return; }
+        setActiveNav(isViewer() ? NAV_COLLECT_KEY : NAV_CLIENTS_KEY);
         rememberScreen(new Runnable() { public void run() { showPaymentHistoryForClient(clientId); }});
         clear("Borrower Payment History");
         addBack("Back to Profile", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showBorrowerProfile(clientId); }});
@@ -5522,18 +5706,30 @@ public class MainActivity extends Activity {
         String today = new SimpleDateFormat("EEE, MMM d, yyyy", Locale.US).format(new Date());
         String collector = "Collector".equals(currentUser.role) && !safe(currentUser.collectorName).isEmpty()
                 ? "\nCollector: " + currentUser.collectorName : "";
-        addCard("A&L Alalay", currentUser.fullName + "\nRole: " + currentUser.role + collector +
-                "\nToday: " + today + "\nBackup: " + backupStatus, (String) null, (View.OnClickListener) null);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card.setBackground(roundedBg(NAVY, 0, 18));
+        card.setElevation(dp(4));
+        card.addView(brandLogoView(true, true));
+        TextView detail = new TextView(this);
+        detail.setText(fallback(currentUser.fullName, currentUser.username) + " | " + currentUser.role + collector +
+                "\n" + today + "\nBackup: " + backupStatus);
+        detail.setTextColor(0xffdbeafe);
+        detail.setTextSize(13);
+        detail.setPadding(0, dp(10), 0, 0);
+        card.addView(detail);
+        addCardToContent(card);
     }
 
     private void addPortfolioCard(double outstanding, double collected, int activeLoans, double rate) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
-        card.setBackground(roundedBg(CARD_BG, LINE, 14));
+        card.setBackground(roundedBg(CARD_BG, LINE, 16));
         card.setElevation(dp(3));
         View accent = new View(this);
-        accent.setBackgroundColor(outstanding > 0 ? BLUE : GREEN);
+        accent.setBackgroundColor(outstanding > 0 ? TEAL : GREEN);
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, dp(4));
         alp.setMargins(0, 0, 0, dp(10));
         card.addView(accent, alp);
@@ -5572,7 +5768,7 @@ public class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
-        card.setBackground(roundedBg(CARD_BG, LINE, 14));
+        card.setBackground(roundedBg(CARD_BG, LINE, 16));
         card.setElevation(dp(3));
         View accent = new View(this);
         accent.setBackgroundColor(statusAccentColor(status));
@@ -5627,14 +5823,14 @@ public class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(10), dp(9), dp(10), dp(9));
-        card.setBackground(roundedBg(statusColor(status), LINE, 12));
+        card.setBackground(roundedBg(statusColor(status), LINE, 14));
         card.setElevation(dp(2));
         View accent = new View(this);
         accent.setBackgroundColor(statusAccentColor(status));
         card.addView(accent, new LinearLayout.LayoutParams(-1, dp(3)));
         TextView iconView = new TextView(this);
         iconView.setText(icon);
-        iconView.setTextColor(MUTED);
+        iconView.setTextColor(statusAccentColor(status));
         iconView.setTextSize(11);
         iconView.setPadding(0, dp(4), 0, 0);
         TextView valueView = new TextView(this);
@@ -5690,7 +5886,7 @@ public class MainActivity extends Activity {
         tile.setOrientation(LinearLayout.VERTICAL);
         tile.setGravity(Gravity.CENTER_VERTICAL);
         tile.setPadding(dp(12), dp(9), dp(12), dp(9));
-        tile.setBackground(roundedBg(CARD_BG, LINE, 12));
+        tile.setBackground(roundedBg(CARD_BG, LINE, 16));
         tile.setElevation(dp(1));
         TextView i = new TextView(this);
         i.setText(iconForTitle(title, icon));
@@ -5728,7 +5924,7 @@ public class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
-        card.setBackground(roundedBg(NAVY, 0, 14));
+        card.setBackground(roundedBg(NAVY, 0, 18));
         if (backListener != null) {
             TextView back = new TextView(this);
             back.setText(backLabel);
@@ -5743,7 +5939,7 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         ImageView avatar = new ImageView(this);
-        avatar.setBackground(roundedBg(0xff1d4ed8, 0, 48));
+        avatar.setBackground(roundedBg(GOLD, 0, 48));
         avatar.setPadding(dp(4), dp(4), dp(4), dp(4));
         try {
             String ref = safe(photoRef).trim();
@@ -5890,11 +6086,11 @@ public class MainActivity extends Activity {
     private TextView chipText(String text, int color) {
         TextView v = new TextView(this);
         v.setText(text);
-        v.setTextColor(color);
+        v.setTextColor(color == NAVY ? TEAL : color);
         v.setTextSize(12);
         v.setTypeface(Typeface.DEFAULT_BOLD);
         v.setPadding(dp(8), dp(5), dp(8), dp(5));
-        v.setBackground(roundedBg(0xffeef2ff, LINE, 18));
+        v.setBackground(roundedBg(TEAL_TINT, LINE, 18));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.setMargins(0, 0, 0, dp(8));
         v.setLayoutParams(lp);
@@ -5961,7 +6157,7 @@ public class MainActivity extends Activity {
     private void addSection(String label) {
         TextView v = new TextView(this);
         v.setText(label);
-        v.setTextColor(BLUE);
+        v.setTextColor(NAVY);
         v.setTextSize(18);
         v.setTypeface(Typeface.DEFAULT_BOLD);
         v.setPadding(0, dp(14), 0, dp(6));
@@ -5971,7 +6167,7 @@ public class MainActivity extends Activity {
     private void addAction(String label, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(label);
-        styleButton(b, ORANGE);
+        styleButton(b, buttonColorForText(label));
         b.setOnClickListener(listener);
         b.setEnabled(true);
         b.setClickable(true);
@@ -5996,7 +6192,7 @@ public class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        card.setBackground(roundedBg(statusColor(title + "\n" + body), LINE, 12));
+        card.setBackground(roundedBg(statusColor(title + "\n" + body), LINE, 14));
         card.setElevation(dp(2));
         View accent = new View(this);
         accent.setBackgroundColor(statusAccentColor(title + "\n" + body));
@@ -6041,7 +6237,7 @@ public class MainActivity extends Activity {
         e.setTextColor(MUTED);
         e.setGravity(Gravity.CENTER);
         e.setPadding(dp(12), dp(24), dp(12), dp(24));
-        e.setBackground(roundedBg(0xffeef2f7, LINE, 12));
+        e.setBackground(roundedBg(BRAND_TINT, LINE, 14));
         e.setElevation(dp(1));
         content.addView(e);
     }
@@ -6094,6 +6290,7 @@ public class MainActivity extends Activity {
         e.setPadding(dp(10), dp(8), dp(10), dp(8));
         e.setTextColor(INK);
         e.setHintTextColor(MUTED);
+        e.setBackground(roundedBg(0xfff8fbff, LINE, 12));
         return e;
     }
 
@@ -6131,10 +6328,10 @@ public class MainActivity extends Activity {
         String s = safe(text).toLowerCase(Locale.US);
         if (s.contains("cancelled") || s.contains("voided") || s.contains("void -")) return 0xfffff1f2;
         if (s.contains("overdue")) return 0xfffff7ed;
-        if (s.contains("due today")) return 0xfffffbeb;
-        if (s.contains("due soon")) return 0xfffffbeb;
+        if (s.contains("due today")) return GOLD_TINT;
+        if (s.contains("due soon")) return GOLD_TINT;
         if (s.contains("paid") || s.contains("fully paid")) return 0xffecfdf5;
-        if (s.contains("active") || s.contains("current") || s.contains("valid")) return 0xffeff6ff;
+        if (s.contains("active") || s.contains("current") || s.contains("valid")) return BRAND_TINT;
         return 0xffffffff;
     }
 
@@ -6143,15 +6340,15 @@ public class MainActivity extends Activity {
         if (s.contains("cancelled") || s.contains("voided") || s.contains("overdue") || s.contains("void -")) return RED;
         if (s.contains("due today") || s.contains("due soon")) return AMBER;
         if (s.contains("paid") || s.contains("fully paid") || s.contains("current") || s.contains("valid")) return GREEN;
-        if (s.contains("active")) return BLUE;
+        if (s.contains("active")) return TEAL;
         return LINE;
     }
 
     private int buttonColorForText(String text) {
         String s = safe(text).toLowerCase(Locale.US);
         if (s.contains("cancel") || s.contains("void") || s.contains("restore")) return RED;
-        if (s.contains("backup") || s.contains("paid") || s.contains("collect") || s.contains("post")) return GREEN;
-        if (s.contains("import") || s.contains("warning") || s.contains("recalc")) return AMBER;
+        if (s.contains("backup") || s.contains("paid") || s.contains("collect") || s.contains("post")) return TEAL;
+        if (s.contains("import") || s.contains("warning") || s.contains("recalc")) return GOLD;
         return NAVY;
     }
 
@@ -6189,9 +6386,9 @@ public class MainActivity extends Activity {
 
     private void styleButton(Button b, int color) {
         b.setAllCaps(false);
-        b.setTextColor(0xffffffff);
+        b.setTextColor((color == GOLD || color == AMBER) ? NAVY : 0xffffffff);
         b.setTextSize(13);
-        b.setBackground(roundedBg(color, 0, 10));
+        b.setBackground(roundedBg(color, 0, 12));
         b.setPadding(dp(10), 0, dp(10), 0);
     }
 
@@ -6302,12 +6499,13 @@ public class MainActivity extends Activity {
         return "<div class='signatures'><div><span></span><p>" + h(left) + "</p></div><div><span></span><p>" + h(right) + "</p></div></div>";
     }
     private String reportHeader(String title, String subtitle) {
-        return "<div class='meta'><b>A&L Alalay Microlending Services</b><br>Printed: " + h(now()) + "<br>Printed by: " + h(currentUsername()) + "</div><h1>" + h(title) + "</h1><p>" + h(subtitle) + "</p>";
+        return "<div class='brand'><div class='mark'>A&L</div><div><b>A&L Alalay</b><br><span>Microlending Services</span></div></div>" +
+                "<div class='meta'>Printed: " + h(now()) + "<br>Printed by: " + h(currentUsername()) + "</div><h1>" + h(title) + "</h1><p>" + h(subtitle) + "</p>";
     }
     private String htmlPage(String title, String body) {
         return "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>" +
-                "body{font-family:sans-serif;color:#0f172a;margin:24px}h1{color:#000f96;font-size:24px;margin:8px 0 12px}h2{color:#000f96;font-size:17px;margin-top:18px}.meta{font-size:13px;margin-bottom:10px}" +
-                "table{width:100%;border-collapse:collapse;margin:10px 0 16px}td,th{border:1px solid #93c5fd;padding:6px;font-size:12px;vertical-align:top}th{background:#000f96;color:white;text-align:left}.meta-table th{width:34%}.meta-table th,.meta-table td{background:white;color:#0f172a}" +
+                "body{font-family:sans-serif;color:#0b1220;margin:24px}h1{color:#071b3a;font-size:24px;margin:8px 0 12px}h2{color:#123c7c;font-size:17px;margin-top:18px}.meta{font-size:13px;margin-bottom:10px;color:#64748b}.brand{display:flex;align-items:center;gap:10px;margin-bottom:12px;color:#071b3a}.brand .mark{background:#071b3a;color:white;border-bottom:4px solid #d9a441;border-radius:12px;padding:10px 12px;font-weight:bold}.brand span{color:#64748b;font-size:12px}" +
+                "table{width:100%;border-collapse:collapse;margin:10px 0 16px}td,th{border:1px solid #d7e0ec;padding:6px;font-size:12px;vertical-align:top}th{background:#071b3a;color:white;text-align:left}.meta-table th{width:34%;background:#e8f2ff;color:#071b3a}.meta-table td{background:white;color:#0b1220}" +
                 ".signatures{display:flex;gap:48px;margin-top:42px}.signatures div{flex:1;text-align:center}.signatures span{display:block;border-top:1px solid #0f172a;height:1px}.signatures p{font-size:12px;margin-top:8px}.boxes{display:flex;gap:16px;margin:12px 0 20px}.boxes div{height:96px;flex:1;border:1px dashed #64748b;text-align:center;padding-top:38px;color:#64748b}" +
                 "@media print{body{margin:12px}.no-print{display:none}}" +
                 "</style></head><body>" + body + "</body></html>";
@@ -6329,6 +6527,7 @@ public class MainActivity extends Activity {
         printablePreviewOpen = true;
         clear("Printable Preview");
         addBack("Back", new View.OnClickListener() { public void onClick(View v) { returnFromPrintablePreview(); }});
+        addCard("A&L Alalay Print Preview", "Review the form, receipt, report, or passbook below before printing or saving as PDF.", (String) null, null);
         final boolean[] loaded = new boolean[]{false};
         final WebView preview = new WebView(this);
         preview.getSettings().setLoadWithOverviewMode(true);
