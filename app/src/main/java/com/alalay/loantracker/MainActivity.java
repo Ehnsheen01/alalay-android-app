@@ -24,6 +24,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.DatePicker;
@@ -561,10 +562,11 @@ public class MainActivity extends Activity {
         if (!requireAdmin()) return;
         clear("Admin Checks");
         addMenuGroup("System Tools", "Integrity checks, release testing, and audit trail review.",
-                new String[]{"[check] System Check", "[list] Release Checklist", "[log] Audit Logs", "[search] Search Audit"},
+                new String[]{"[check] System Check", "[list] Release Checklist", "[print] Print Test Page", "[log] Audit Logs", "[search] Search Audit"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() { public void onClick(View v) { showSystemCheck(); }},
                         new View.OnClickListener() { public void onClick(View v) { showReleaseReadinessChecklist(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showPrintTestPage(); }},
                         new View.OnClickListener() { public void onClick(View v) { showAuditLogs(null); }},
                         new View.OnClickListener() { public void onClick(View v) { showAuditSearchDialog(); }}
                 });
@@ -598,6 +600,18 @@ public class MainActivity extends Activity {
                         new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }},
                         new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }}
                 });
+    }
+
+    private void showPrintTestPage() {
+        if (!requireAdmin()) return;
+        printHtml(
+                "AlalayPrintTest",
+                htmlPage("Print Test Page", reportHeader("Print Test Page", "Internal print engine test.") +
+                        "<h1>A&L Alalay Print Test</h1><p>If you can see this, printable preview works.</p>"),
+                "Print test page generated",
+                "print_test",
+                "AlalayPrintTest",
+                "Generated print test page");
     }
 
     private void showAuditSearchDialog() {
@@ -2398,12 +2412,16 @@ public class MainActivity extends Activity {
     }
 
     private void printLatestPassbookForClient(String clientId) {
+        toast("Opening print preview...");
+        if (safe(clientId).isEmpty()) { toast("Passbook not available. No borrower profile linked."); return; }
         String loanId = latestLoanIdForClient(clientId);
-        if (loanId.isEmpty()) { toast("No loan found for this borrower."); return; }
+        if (loanId.isEmpty()) { toast("Passbook not available. No loan found for this borrower."); return; }
         printPassbook(loanId);
     }
 
     private void printLatestLoanFormForClient(String clientId) {
+        toast("Opening print preview...");
+        if (safe(clientId).isEmpty()) { toast("Loan not found."); return; }
         String loanId = latestLoanIdForClient(clientId);
         if (loanId.isEmpty()) { toast("No loan found for this borrower."); return; }
         printLoanReleaseForm(loanId);
@@ -2509,9 +2527,11 @@ public class MainActivity extends Activity {
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForLoan(loanId); }});
                 }
                 if (canPrintPassbook()) {
-                    labels.add("Print");
+                    labels.add("Print Passbook");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { printPassbook(loanId); }});
                 }
+                labels.add("Print Schedule");
+                listeners.add(new View.OnClickListener() { public void onClick(View v) { printRepaymentSchedule(loanId); }});
                 if (canPrintLoanReleaseForm(loanId)) {
                     labels.add("Print Loan Form");
                     listeners.add(new View.OnClickListener() { public void onClick(View v) { printLoanReleaseForm(loanId); }});
@@ -2963,8 +2983,9 @@ public class MainActivity extends Activity {
                     "View Payments", new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForLoan(loanId); }});
             addSection("Receipts / Forms");
             addCard("Printable Records", "Print release form, passbook, or borrower repayment schedule.",
-                    new String[]{canPrintLoanReleaseForm(loanId) ? "Print Loan Form" : null, canPrintPassbook() ? "Passbook" : null, "Print Schedule"},
+                    new String[]{"Print Loan Details", canPrintLoanReleaseForm(loanId) ? "Print Loan Form" : null, canPrintPassbook() ? "Passbook" : null, "Print Schedule"},
                     new View.OnClickListener[]{
+                            new View.OnClickListener() { public void onClick(View v) { printLoanDetails(loanId); }},
                             canPrintLoanReleaseForm(loanId) ? new View.OnClickListener() { public void onClick(View v) { printLoanReleaseForm(loanId); }} : null,
                             canPrintPassbook() ? new View.OnClickListener() { public void onClick(View v) { printPassbook(loanId); }} : null,
                             new View.OnClickListener() { public void onClick(View v) { printRepaymentSchedule(loanId); }}
@@ -4302,10 +4323,11 @@ public class MainActivity extends Activity {
     }
 
     private void printPassbook(String loanId) {
-        if (!requirePermission(canPrintPassbook())) return;
+        toast("Opening print preview...");
+        if (!canPrintPassbook()) { notAllowedToPrint(); return; }
         LoanRow lr = findLoan(loanId);
-        if (lr == null) { toast("Loan not found."); return; }
-        if (!canAccessLoan(loanId)) { notAllowed(); return; }
+        if (lr == null) { toast("Passbook not available. Loan not found."); return; }
+        if (!canAccessLoan(loanId)) { notAllowedToPrint(); return; }
         LoanDetail detail = findLoanDetail(loanId);
         double totalPaid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE loan_id=? AND voided=0", new String[]{loanId});
         StringBuilder rows = new StringBuilder();
@@ -4346,10 +4368,48 @@ public class MainActivity extends Activity {
         printHtml("Passbook-" + loanId, htmlPage("Borrower Passbook", body), "Passbook print/PDF generated", "loan", loanId, "Generated passbook print/PDF for " + loanId);
     }
 
-    private void printRepaymentSchedule(String loanId) {
+    private void printLoanDetails(String loanId) {
+        toast("Opening print preview...");
         LoanRow lr = findLoan(loanId);
         if (lr == null) { toast("Loan not found."); return; }
-        if (!canAccessLoan(loanId)) { notAllowed(); return; }
+        if (!canAccessLoan(loanId)) { notAllowedToPrint(); return; }
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT loan_id,client_id,client_name,release_date,principal,interest_rate,term_weeks,weekly_due,total_due,balance,status,next_due_date,terms,released_thru,collector,maturity_date,reference_number,created_by FROM loans WHERE loan_id=?", new String[]{loanId});
+        try {
+            if (!c.moveToFirst()) { toast("Loan not found."); return; }
+            double totalPaid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE loan_id=? AND voided=0", new String[]{loanId});
+            int scheduleRows = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM schedule WHERE loan_id=?", new String[]{loanId});
+            String body = "<div class='meta'><b>A&L Alalay Microlending Services</b></div><h1>Loan Details</h1>" +
+                    metaTable(new String[][]{
+                            {"Loan Account Number", c.getString(0)},
+                            {"Reference Number", fallback(c.getString(16), c.getString(0))},
+                            {"Borrower", c.getString(2)},
+                            {"Client ID", c.getString(1)},
+                            {"Principal", peso(c.getDouble(4))},
+                            {"Interest Rate", percent(c.getDouble(5))},
+                            {"Total Payable", peso(c.getDouble(8))},
+                            {"Total Paid", peso(totalPaid)},
+                            {"Balance", peso(c.getDouble(9))},
+                            {"Status", c.getString(10)},
+                            {"Release Date", c.getString(3)},
+                            {"Maturity Date", c.getString(15)},
+                            {"Next Due Date", c.getString(11)},
+                            {"Term/Frequency", fallback(c.getString(12), c.getInt(6) + " payment(s)") + " at " + peso(c.getDouble(7))},
+                            {"Schedule Rows", String.valueOf(scheduleRows)},
+                            {"Release Method", c.getString(13)},
+                            {"Collector", c.getString(14)},
+                            {"Released By", c.getString(17)}
+                    }) + signatureBlock("Borrower Signature", "Collector/Cashier Signature");
+            printHtml("LoanDetails-" + loanId, htmlPage("Loan Details", body), "Loan detail print/PDF generated", "loan", loanId, "Generated loan detail print/PDF for " + loanId);
+        } finally {
+            c.close();
+        }
+    }
+
+    private void printRepaymentSchedule(String loanId) {
+        toast("Opening print preview...");
+        LoanRow lr = findLoan(loanId);
+        if (lr == null) { toast("Loan not found."); return; }
+        if (!canAccessLoan(loanId)) { notAllowedToPrint(); return; }
         LoanDetail detail = findLoanDetail(loanId);
         double totalPaid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(paid_to_date),0) FROM schedule WHERE loan_id=?", new String[]{loanId});
         StringBuilder rows = new StringBuilder();
@@ -4361,13 +4421,14 @@ public class MainActivity extends Activity {
         double cumulativePaid = 0;
         Cursor c = db.getReadableDatabase().rawQuery("SELECT installment_no,due_date,scheduled_amount,paid_to_date,status FROM schedule WHERE loan_id=? ORDER BY installment_no", new String[]{loanId});
         try {
-            while (c.moveToNext()) {
+            if (!c.moveToFirst()) { toast("No schedule found."); return; }
+            do {
                 cumulativePaid += c.getDouble(3);
                 double remaining = Math.max(0, totalDue - cumulativePaid);
                 rows.append(tr(td(String.valueOf(c.getInt(0))) + td(c.getString(1)) + td(peso(principalPart)) +
                         td(peso(interestPart)) + td(peso(c.getDouble(2))) + td(peso(c.getDouble(3))) +
                         td(peso(remaining)) + td(c.getString(4))));
-            }
+            } while (c.moveToNext());
         } finally {
             c.close();
         }
@@ -4427,7 +4488,8 @@ public class MainActivity extends Activity {
     }
 
     private void printPaymentReceipt(String paymentId) {
-        if (!canPrintReceipt(paymentId)) { notAllowed(); return; }
+        toast("Opening print preview...");
+        if (!canPrintReceipt(paymentId)) { notAllowedToPrint(); return; }
         Cursor c = db.getReadableDatabase().rawQuery("SELECT r.payment_id,r.receipt_number,r.payment_date,r.encoded_at,r.client_name,r.loan_id,r.amount,r.method,l.balance,l.collector,r.posted_by,r.voided,r.void_reason FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.payment_id=? OR r.receipt_number=?", new String[]{paymentId, paymentId});
         try {
             if (!c.moveToFirst()) { toast("Payment not found."); return; }
@@ -4452,7 +4514,8 @@ public class MainActivity extends Activity {
     }
 
     private void printLoanReleaseForm(String loanId) {
-        if (!canPrintLoanReleaseForm(loanId)) { notAllowed(); return; }
+        toast("Opening print preview...");
+        if (!canPrintLoanReleaseForm(loanId)) { notAllowedToPrint(); return; }
         Cursor c = db.getReadableDatabase().rawQuery("SELECT l.loan_id,l.reference_number,l.client_name,c.phone,c.address,l.principal,l.interest_rate,l.total_due,l.term_weeks,l.weekly_due,l.release_date,l.released_thru,l.collector,l.created_by,l.status,c.valid_id_no,c.valid_id_file,c.photo_file,l.terms,l.maturity_date,l.balance FROM loans l LEFT JOIN clients c ON c.client_id=l.client_id WHERE l.loan_id=?", new String[]{loanId});
         try {
             if (!c.moveToFirst()) { toast("Loan record is missing. Please refresh the loan list and try again."); return; }
@@ -4535,7 +4598,8 @@ public class MainActivity extends Activity {
     }
 
     private void printCollectionSheet(String collectorFilter, String date) {
-        if (!canPrintCollectionSheet()) { notAllowed(); return; }
+        toast("Opening print preview...");
+        if (!canPrintCollectionSheet()) { notAllowedToPrint(); return; }
         String collector = isCollector() ? currentUser.collectorName : (isAll(collectorFilter) ? "All" : collectorFilter);
         ArrayList<String> args = new ArrayList<>();
         args.add(date);
@@ -5000,6 +5064,10 @@ public class MainActivity extends Activity {
 
     private void notAllowed() {
         toast("You are not allowed to access this action.");
+    }
+
+    private void notAllowedToPrint() {
+        toast("You are not allowed to print this record.");
     }
 
     private void ensureDefaultCollectorRates() {
@@ -5666,7 +5734,9 @@ public class MainActivity extends Activity {
         arrow.setTextSize(24);
         row.addView(arrow);
         card.addView(row);
+        card.setEnabled(true);
         card.setOnClickListener(listener);
+        card.setClickable(true);
         addCardToContent(card);
     }
 
@@ -5845,6 +5915,8 @@ public class MainActivity extends Activity {
         b.setText(label);
         styleButton(b, ORANGE);
         b.setOnClickListener(listener);
+        b.setEnabled(true);
+        b.setClickable(true);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(46));
         lp.setMargins(0, 0, 0, dp(8));
         content.addView(b, lp);
@@ -5892,6 +5964,8 @@ public class MainActivity extends Activity {
                 button.setText(actions[i]);
                 styleButton(button, buttonColorForText(actions[i]));
                 button.setOnClickListener(listeners[i]);
+                button.setEnabled(true);
+                button.setClickable(true);
                 LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, dp(44));
                 blp.setMargins(0, dp(8), 0, 0);
                 button.setLayoutParams(blp);
@@ -6079,6 +6153,8 @@ public class MainActivity extends Activity {
         b.setText(label);
         styleButton(b, color);
         b.setOnClickListener(listener);
+        b.setEnabled(true);
+        b.setClickable(true);
         return b;
     }
 
@@ -6179,44 +6255,50 @@ public class MainActivity extends Activity {
                 "</style></head><body>" + body + "</body></html>";
     }
     private void printHtml(final String jobName, final String html, String auditAction, String entityType, String entityId, String details) {
-        WebView web = new WebView(this);
-        web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
-        web.postDelayed(() -> {
-            try {
-                PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
-                if (pm != null) {
-                    pm.print(jobName, web.createPrintDocumentAdapter(jobName), new PrintAttributes.Builder().build());
-                    toast("Print dialog opened. Choose printer or Save as PDF.");
-                } else {
-                    showPrintablePreview(jobName, html);
-                }
-            } catch (Exception ex) {
-                toast("Print dialog unavailable. Showing printable preview.");
-                showPrintablePreview(jobName, html);
-            }
-        }, 800);
+        if (safe(html).trim().isEmpty()) {
+            toast("Nothing to print. Printable content is empty.");
+            audit(db.getWritableDatabase(), "Print failed - empty content", entityType, entityId,
+                    "Printable content was empty for " + safe(jobName), currentUsername());
+            return;
+        }
+        toast("Preparing printable page...");
+        showPrintablePreview(jobName, html);
         audit(db.getWritableDatabase(), auditAction, entityType, entityId, details, currentUsername());
     }
 
     private void showPrintablePreview(final String jobName, final String html) {
         clear("Printable Preview");
         addBack("Back", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showDashboard(); }});
+        final boolean[] loaded = new boolean[]{false};
+        final WebView preview = new WebView(this);
+        preview.getSettings().setLoadWithOverviewMode(true);
+        preview.getSettings().setUseWideViewPort(true);
+        preview.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                loaded[0] = true;
+                toast("Printable page loaded.");
+            }
+        });
         addAction("Print / Save as PDF", new View.OnClickListener() { public void onClick(View v) {
-            WebView web = new WebView(MainActivity.this);
-            web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
-            web.postDelayed(() -> {
-                try {
-                    PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
-                    if (pm != null) pm.print(jobName, web.createPrintDocumentAdapter(jobName), new PrintAttributes.Builder().build());
-                    else toast("No Android print service is available on this device.");
-                } catch (Exception ex) {
-                    toast("No Android print service is available on this device.");
+            if (!loaded[0]) {
+                toast("Printable page is still loading. Please try again in a moment.");
+                return;
+            }
+            try {
+                PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+                if (pm == null) {
+                    toast("Print service unavailable. Showing preview instead.");
+                    return;
                 }
-            }, 500);
+                toast("Opening Android print dialog...");
+                pm.print(jobName, preview.createPrintDocumentAdapter(jobName), new PrintAttributes.Builder().build());
+            } catch (Exception ex) {
+                toast("Print failed: " + fallback(ex.getMessage(), ex.getClass().getSimpleName()));
+            }
         }});
-        WebView preview = new WebView(this);
         preview.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
-        content.addView(preview, new LinearLayout.LayoutParams(-1, dp(520)));
+        content.addView(preview, new LinearLayout.LayoutParams(-1, dp(620)));
     }
     private String htmlRows(String sql, String[] args, int[] moneyColumns) {
         StringBuilder rows = new StringBuilder();
