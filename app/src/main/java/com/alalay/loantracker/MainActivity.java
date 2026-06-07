@@ -104,6 +104,9 @@ public class MainActivity extends Activity {
     private String pendingAttachColumn = "";
     private String pendingAttachKind = "";
     private volatile boolean databaseReady = false;
+    private Runnable currentScreenReturnAction;
+    private Runnable printablePreviewReturnAction;
+    private boolean printablePreviewOpen = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -156,6 +159,33 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override
+    public void onBackPressed() {
+        if (printablePreviewOpen) {
+            returnFromPrintablePreview();
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    private void rememberScreen(Runnable returnAction) {
+        currentScreenReturnAction = returnAction;
+        printablePreviewOpen = false;
+    }
+
+    private void returnFromPrintablePreview() {
+        printablePreviewOpen = false;
+        Runnable action = printablePreviewReturnAction;
+        printablePreviewReturnAction = null;
+        if (action != null) {
+            action.run();
+        } else if (isViewer()) {
+            showClientPortalDashboard();
+        } else {
+            showDashboard();
+        }
+    }
+
     private void prepareDatabaseAsync() {
         new Thread(() -> {
             try {
@@ -169,6 +199,9 @@ public class MainActivity extends Activity {
     }
 
     private void showLoginScreen() {
+        currentScreenReturnAction = null;
+        printablePreviewReturnAction = null;
+        printablePreviewOpen = false;
         currentUser = null;
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -331,6 +364,7 @@ public class MainActivity extends Activity {
 
     private void showDashboard() {
         if (isViewer()) { showClientPortalDashboard(); return; }
+        rememberScreen(new Runnable() { public void run() { showDashboard(); }});
         clear("A&L Alalay");
         SQLiteDatabase r = db.getReadableDatabase();
         int clients = scalarInt(r, scopedClientCountSql(), scopedArgs());
@@ -515,6 +549,7 @@ public class MainActivity extends Activity {
     }
 
     private void showClientPortalDashboard() {
+        rememberScreen(new Runnable() { public void run() { showClientPortalDashboard(); }});
         clear("Client Portal");
         String clientId = viewerClientId();
         if (clientId.isEmpty()) {
@@ -560,6 +595,7 @@ public class MainActivity extends Activity {
 
     private void showAdminChecks() {
         if (!requireAdmin()) return;
+        rememberScreen(new Runnable() { public void run() { showAdminChecks(); }});
         clear("Admin Checks");
         addMenuGroup("System Tools", "Integrity checks, release testing, and audit trail review.",
                 new String[]{"[check] System Check", "[list] Release Checklist", "[print] Print Test Page", "[log] Audit Logs", "[search] Search Audit"},
@@ -2291,6 +2327,7 @@ public class MainActivity extends Activity {
 
     private void showClients() {
         if (isViewer()) { showClientPortalDashboard(); return; }
+        rememberScreen(new Runnable() { public void run() { showClients(); }});
         clear("Clients");
         if (canAddClient()) addAction("Add Client", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
         addAction("Search Clients", new View.OnClickListener() { public void onClick(View v) { showClientSearchDialog(); }});
@@ -2337,6 +2374,7 @@ public class MainActivity extends Activity {
 
     private void showBorrowerProfile(final String clientId) {
         if (!canAccessClient(clientId)) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showBorrowerProfile(clientId); }});
         Cursor c = db.getReadableDatabase().rawQuery("SELECT client_id,name,phone,address,enrolled_date,status,active_loans,total_outstanding,employment,collector,valid_id_no,valid_id_file,photo_file FROM clients WHERE client_id=?", new String[]{clientId});
         try {
             if (!c.moveToFirst()) { toast("Borrower not found."); return; }
@@ -2441,6 +2479,7 @@ public class MainActivity extends Activity {
 
     private void showBorrowerLoanHistory(final String clientId, final String filter) {
         if (!canAccessClient(clientId)) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showBorrowerLoanHistory(clientId, filter); }});
         clear("Borrower Loan History");
         addBack("Back to Profile", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showBorrowerProfile(clientId); }});
         addActionRow(content, new String[]{"Active", "Completed", "Cancelled", "Overdue", "All"}, new View.OnClickListener[]{
@@ -2490,6 +2529,7 @@ public class MainActivity extends Activity {
     }
 
     private void showLoansFiltered(String filter) {
+        rememberScreen(new Runnable() { public void run() { showLoansFiltered(filter); }});
         clear("Loans");
         addLoanFilterChips(filter);
         addActionGrid(
@@ -2851,6 +2891,7 @@ public class MainActivity extends Activity {
     }
 
     private void showWeeklyCollection() {
+        rememberScreen(new Runnable() { public void run() { showWeeklyCollection(); }});
         clear("Weekly Collection Sheet");
         addAction("Print Collection Sheet", new View.OnClickListener() { public void onClick(View v) { showCollectionSheetPrintDialog(); }});
         Calendar end = Calendar.getInstance();
@@ -2861,6 +2902,7 @@ public class MainActivity extends Activity {
 
     private void showReportsMenu() {
         if (!requirePermission(canViewReports())) return;
+        rememberScreen(new Runnable() { public void run() { showReportsMenu(); }});
         clear("Reports");
         addMenuGroup("Collection Reports", "Daily and weekly collections with print and CSV options inside each report.",
                 new String[]{"Daily Collection", "Weekly Collection", "Export CSV"},
@@ -2942,6 +2984,7 @@ public class MainActivity extends Activity {
 
     private void showLoanDetails(final String loanId) {
         if (!canAccessLoan(loanId)) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showLoanDetails(loanId); }});
         Cursor c = db.getReadableDatabase().rawQuery("SELECT loan_id,client_name,principal,interest_rate,total_due,balance,term_weeks,weekly_due,release_date,maturity_date,collector,released_thru,status,next_due_date,terms,reference_number FROM loans WHERE loan_id=?", new String[]{loanId});
         try {
             if (!c.moveToFirst()) { toast("Loan not found."); return; }
@@ -2999,6 +3042,7 @@ public class MainActivity extends Activity {
 
     private void showRepaymentSchedule(final String loanId) {
         if (!canAccessLoan(loanId)) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showRepaymentSchedule(loanId); }});
         Cursor loan = db.getReadableDatabase().rawQuery("SELECT client_name,principal,total_due,term_weeks,balance,status FROM loans WHERE loan_id=?", new String[]{loanId});
         try {
             if (!loan.moveToFirst()) { toast("Loan not found."); return; }
@@ -3195,6 +3239,7 @@ public class MainActivity extends Activity {
     }
 
     private void showDailyCollectionReport(ReportFilter f) {
+        rememberScreen(new Runnable() { public void run() { showDailyCollectionReport(f); }});
         clear("Daily Collection Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printDailyCollectionReport(f); }});
@@ -3233,6 +3278,7 @@ public class MainActivity extends Activity {
     }
 
     private void showWeeklyCollectionReport(ReportFilter f) {
+        rememberScreen(new Runnable() { public void run() { showWeeklyCollectionReport(f); }});
         clear("Weekly Collection Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printWeeklyCollectionReport(f); }});
@@ -3271,6 +3317,7 @@ public class MainActivity extends Activity {
 
     private void showOverdueReport(ReportFilter f) {
         if (!canOpenReport("Overdue")) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showOverdueReport(f); }});
         clear("Overdue Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printOverdueReport(f); }});
@@ -3298,6 +3345,7 @@ public class MainActivity extends Activity {
 
     private void showLoanReleaseReport(ReportFilter f) {
         if (!canOpenReport("Loan Release")) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showLoanReleaseReport(f); }});
         clear("Loan Release Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printLoanReleaseReport(f); }});
@@ -3326,6 +3374,7 @@ public class MainActivity extends Activity {
 
     private void showFullyPaidLoansReport(ReportFilter f) {
         if (!canOpenReport("Fully Paid Loans")) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showFullyPaidLoansReport(f); }});
         clear("Fully Paid Loans Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printFullyPaidLoansReport(f); }});
@@ -3350,6 +3399,7 @@ public class MainActivity extends Activity {
 
     private void showCancelledVoidedReport(ReportFilter f) {
         if (!canOpenReport("Cancelled / Voided")) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showCancelledVoidedReport(f); }});
         clear("Cancelled Loans / Voided Payments");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addCopySummary("Cancelled / Voided Report\nRange: " + f.startDate + " to " + f.endDate + "\nCollector: " + f.collector);
@@ -3391,6 +3441,7 @@ public class MainActivity extends Activity {
 
     private void showCollectorPerformanceReport(ReportFilter f) {
         if (!canOpenReport("Collector Performance")) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showCollectorPerformanceReport(f); }});
         clear("Collector Performance Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printCollectorPerformanceReport(f); }});
@@ -3606,6 +3657,7 @@ public class MainActivity extends Activity {
 
     private void showCommissionReleaseHistory(String collectorFilter) {
         if (!canViewCommissionReports()) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showCommissionReleaseHistory(collectorFilter); }});
         clear("Commission Release History");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printCommissionReleaseReport(collectorFilter); }});
@@ -3628,6 +3680,7 @@ public class MainActivity extends Activity {
 
     private void showCommissionSummaryReport() {
         if (!canViewCommissionReports()) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showCommissionSummaryReport(); }});
         clear("Commission Summary Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printCommissionSummaryReport(); }});
@@ -3636,6 +3689,7 @@ public class MainActivity extends Activity {
 
     private void showCommissionBalanceReport() {
         if (!canViewCommissionReports()) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showCommissionBalanceReport(); }});
         clear("Collector Commission Balance Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
         addCommissionSummaryCards("Balance");
@@ -4119,6 +4173,7 @@ public class MainActivity extends Activity {
 
     private void showPaymentHistoryForLoan(String loanId) {
         if (!requirePermission(canViewPaymentHistory())) return;
+        rememberScreen(new Runnable() { public void run() { showPaymentHistoryForLoan(loanId); }});
         LoanRow lr = findLoan(loanId);
         if (lr != null && !canAccessLoan(loanId)) { notAllowed(); return; }
         clear("Payment History");
@@ -4135,6 +4190,7 @@ public class MainActivity extends Activity {
     private void showPaymentHistoryForClient(String clientId) {
         if (!requirePermission(canViewPaymentHistory())) return;
         if (!canAccessClient(clientId)) { notAllowed(); return; }
+        rememberScreen(new Runnable() { public void run() { showPaymentHistoryForClient(clientId); }});
         clear("Borrower Payment History");
         addBack("Back to Profile", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showBorrowerProfile(clientId); }});
         showPaymentRows("SELECT payment_id,receipt_number,payment_date,amount,method,posted_by,remarks,voided,void_reason FROM repayments WHERE client_id=? ORDER BY payment_date DESC, encoded_at DESC",
@@ -4446,6 +4502,7 @@ public class MainActivity extends Activity {
     }
 
     private void showPaymentReceiptScreen(final String paymentId) {
+        rememberScreen(new Runnable() { public void run() { showPaymentReceiptScreen(paymentId); }});
         clear("Payment Receipt");
         addBack("Back", new View.OnClickListener() { public void onClick(View v) {
             PaymentRow pr = findPayment(paymentId);
@@ -4466,6 +4523,7 @@ public class MainActivity extends Activity {
     }
 
     private void showLoanReleasePrintScreen(final String loanId) {
+        rememberScreen(new Runnable() { public void run() { showLoanReleasePrintScreen(loanId); }});
         clear("Loan Release Form");
         addAction("Back to Loans", new View.OnClickListener() { public void onClick(View v) { showLoans(); }});
         addAction("Print Loan Release Form", new View.OnClickListener() { public void onClick(View v) { printLoanReleaseForm(loanId); }});
@@ -6262,13 +6320,15 @@ public class MainActivity extends Activity {
             return;
         }
         toast("Preparing printable page...");
+        printablePreviewReturnAction = currentScreenReturnAction;
         showPrintablePreview(jobName, html);
         audit(db.getWritableDatabase(), auditAction, entityType, entityId, details, currentUsername());
     }
 
     private void showPrintablePreview(final String jobName, final String html) {
+        printablePreviewOpen = true;
         clear("Printable Preview");
-        addBack("Back", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showDashboard(); }});
+        addBack("Back", new View.OnClickListener() { public void onClick(View v) { returnFromPrintablePreview(); }});
         final boolean[] loaded = new boolean[]{false};
         final WebView preview = new WebView(this);
         preview.getSettings().setLoadWithOverviewMode(true);
