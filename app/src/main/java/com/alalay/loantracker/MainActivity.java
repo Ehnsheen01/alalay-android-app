@@ -89,7 +89,7 @@ public class MainActivity extends Activity {
     private static final int REQ_IMPORT_CSV = 502;
     private static final int REQ_ATTACH_CLIENT_PHOTO = 503;
     private static final int REQ_ATTACH_CLIENT_ID = 504;
-    private static final int APP_DB_VERSION = 6;
+    private static final int APP_DB_VERSION = 7;
     private static final String[] BACKUP_TABLES = new String[]{"users", "clients", "loans", "schedule", "repayments", "audit_logs", "commission_settings", "collector_commission_rates", "commission_ledger", "commission_releases"};
     private static final String[] GOOGLE_IMPORT_TYPES = new String[]{"Clients", "Loans", "Payment Schedule", "Repayments", "Collector Commission Rates", "Dashboard Reference"};
 
@@ -211,7 +211,8 @@ public class MainActivity extends Activity {
             }
             currentUser = user;
             buildShell();
-            showDashboard();
+            if (isViewer()) showClientPortalDashboard();
+            else showDashboard();
             if ("admin".equalsIgnoreCase(text(username)) && "admin123".equals(text(password))) {
                 showChangePasswordDialog(true);
             }
@@ -256,7 +257,39 @@ public class MainActivity extends Activity {
         content.setPadding(dp(12), dp(12), dp(12), dp(24));
         body.addView(content);
         root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(bottomNavBar());
         setContentView(root);
+    }
+
+    private LinearLayout bottomNavBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER);
+        bar.setPadding(dp(6), dp(6), dp(6), dp(6));
+        bar.setBackgroundColor(CARD_BG);
+        bar.addView(bottomNavButton("Home", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showDashboard(); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+        if (isViewer()) {
+            bar.addView(bottomNavButton("Passbook", new View.OnClickListener() { public void onClick(View v) { printLatestPassbookForClient(viewerClientId()); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+            bar.addView(bottomNavButton("Schedule", new View.OnClickListener() { public void onClick(View v) { showLatestScheduleForClient(viewerClientId()); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+            bar.addView(bottomNavButton("Profile", new View.OnClickListener() { public void onClick(View v) { showMyProfile(); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+        } else {
+            bar.addView(bottomNavButton("Clients", new View.OnClickListener() { public void onClick(View v) { showClients(); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+            bar.addView(bottomNavButton("Loans", new View.OnClickListener() { public void onClick(View v) { showLoans(); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+            if (canPostPayment()) bar.addView(bottomNavButton("Collect", new View.OnClickListener() { public void onClick(View v) { showCollectPaymentDialog(""); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+            bar.addView(bottomNavButton("Menu", new View.OnClickListener() { public void onClick(View v) { showMainMenu(); }}), new LinearLayout.LayoutParams(0, dp(50), 1));
+        }
+        return bar;
+    }
+
+    private Button bottomNavButton(String text, View.OnClickListener listener) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        b.setTextSize(11);
+        b.setTextColor(NAVY);
+        b.setBackground(roundedBg(0xfff8fafc, LINE, 10));
+        b.setOnClickListener(listener);
+        return b;
     }
 
     private Button navButton(String text, View.OnClickListener listener) {
@@ -282,7 +315,21 @@ public class MainActivity extends Activity {
         content.addView(h);
     }
 
+    private void addBack(String label, View.OnClickListener listener) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(13);
+        b.setTextColor(NAVY);
+        b.setBackground(roundedBg(0xffeff6ff, LINE, 10));
+        b.setOnClickListener(listener);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(42));
+        lp.setMargins(0, 0, 0, dp(10));
+        content.addView(b, lp);
+    }
+
     private void showDashboard() {
+        if (isViewer()) { showClientPortalDashboard(); return; }
         clear("A&L Alalay");
         SQLiteDatabase r = db.getReadableDatabase();
         int clients = scalarInt(r, scopedClientCountSql(), scopedArgs());
@@ -361,6 +408,7 @@ public class MainActivity extends Activity {
     }
 
     private void showMainMenu() {
+        if (isViewer()) { showClientPortalDashboard(); return; }
         clear("Menu");
         if (canPostPayment() || canViewPaymentHistory()) {
             addMenuGroup("Daily Operations", "Fast actions for today's work.",
@@ -412,6 +460,10 @@ public class MainActivity extends Activity {
 
     private void showMyProfile() {
         if (currentUser == null) { showLoginScreen(); return; }
+        if (isViewer()) {
+            showClientPortalDashboard();
+            return;
+        }
         clear("My Profile");
         String displayName = fallback(currentUser.fullName, currentUser.username);
         String subtitle = "User ID: " + currentUser.id + " • " + currentUser.username;
@@ -425,11 +477,17 @@ public class MainActivity extends Activity {
             double actual = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND UPPER(COALESCE(l.collector,''))=UPPER(?)", new String[]{collector});
             double available = commissionAvailable(collector);
             double released = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(amount),0) FROM commission_releases WHERE UPPER(COALESCE(collector,''))=UPPER(?) AND status='Released'", new String[]{collector});
+            CommissionSetting setting = getCollectorCommissionSetting(collector);
+            int eligible = fullyPaidEligibleLoanCount(collector);
+            double expectedCommission = expectedCommissionForCollector(collector);
             addCard("Collector Summary",
                     "Assigned Borrowers: " + borrowers +
                             "\nActive Loans Handled: " + loans +
                             "\nExpected Collection: " + peso(expected) +
                             "\nActual Collection: " + peso(actual) +
+                            "\nCollector Rate: " + percent(setting.rate) +
+                            "\nFully Paid Eligible Accounts: " + eligible +
+                            "\nExpected Commission: " + peso(expectedCommission) +
                             "\nAvailable Commission: " + peso(available) +
                             "\nReleased Commission: " + peso(released) +
                             "\nRemaining Balance: " + peso(available),
@@ -453,6 +511,50 @@ public class MainActivity extends Activity {
         }
         addProfileMenuItem("⚿", "Change Password", "Update your local login password.", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
         addProfileMenuItem("⇥", "Logout", "Return to login screen.", new View.OnClickListener() { public void onClick(View v) { showLoginScreen(); }});
+    }
+
+    private void showClientPortalDashboard() {
+        clear("Client Portal");
+        String clientId = viewerClientId();
+        if (clientId.isEmpty()) {
+            addEmpty("No borrower profile linked. Please contact Admin.");
+            addProfileMenuItem("⚿", "Change Password", "Update your borrower portal password.", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
+            addProfileMenuItem("⇥", "Logout", "Return to login screen.", new View.OnClickListener() { public void onClick(View v) { showLoginScreen(); }});
+            return;
+        }
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT client_id,name,phone,address,status,active_loans,total_outstanding,collector,valid_id_no,photo_file,valid_id_file FROM clients WHERE client_id=?", new String[]{clientId});
+        try {
+            if (!c.moveToFirst()) {
+                addEmpty("No borrower profile linked. Please contact Admin.");
+                return;
+            }
+            addProfileHeader("Logout", new View.OnClickListener() { public void onClick(View v) { showLoginScreen(); }},
+                    safe(c.getString(1)), "Client ID: " + safe(c.getString(0)), fallback(c.getString(4), "Active"), c.getString(9));
+            String loanId = latestLoanIdForClient(clientId);
+            String nextDue = loanId.isEmpty() ? "" : nextOpenDue(loanId);
+            int paidInstallments = loanId.isEmpty() ? 0 : scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM schedule WHERE loan_id=? AND status='Paid'", new String[]{loanId});
+            int unpaidInstallments = loanId.isEmpty() ? 0 : scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM schedule WHERE loan_id=? AND status!='Paid'", new String[]{loanId});
+            addCard("E-Passbook Summary",
+                    "Contact: " + fallback(c.getString(2), "No phone") +
+                            "\nAddress: " + fallback(c.getString(3), "No address") +
+                            "\nOutstanding: " + peso(c.getDouble(6)) +
+                            "\nActive Loans: " + c.getInt(5) +
+                            "\nNext Due: " + fallback(nextDue, "No upcoming due") +
+                            "\nPaid Installments: " + paidInstallments +
+                            "\nUnpaid Installments: " + unpaidInstallments,
+                    (String) null, (View.OnClickListener) null);
+            addAttachmentPreview("Borrower Photo", c.getString(9));
+            addAttachmentPreview("Valid ID File", c.getString(10));
+            addSection("My Records");
+            addProfileMenuItem("▤", "Loan History", "View all your loan accounts.", new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "All"); }});
+            addProfileMenuItem("●", "Active Loan Details", "Open your active or latest loan.", new View.OnClickListener() { public void onClick(View v) { showLatestLoanDetailsForClient(clientId); }});
+            addProfileMenuItem("≡", "Repayment Schedule", "View your repayment schedule.", new View.OnClickListener() { public void onClick(View v) { showLatestScheduleForClient(clientId); }});
+            addProfileMenuItem("₱", "Payment History", "View receipt and payment history.", new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForClient(clientId); }});
+            addProfileMenuItem("⌘", "View / Print E-Passbook", "Open Android Print / Save as PDF.", new View.OnClickListener() { public void onClick(View v) { printLatestPassbookForClient(clientId); }});
+            addProfileMenuItem("⚿", "Change Password", "Update your portal password.", new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }});
+        } finally {
+            c.close();
+        }
     }
 
     private void showAdminChecks() {
@@ -2022,7 +2124,7 @@ public class MainActivity extends Activity {
         clear("User Management");
         addAction("Add User", new View.OnClickListener() { public void onClick(View v) { showUserDialog(null); }});
         addAction("Back to Admin Checks", new View.OnClickListener() { public void onClick(View v) { showAdminChecks(); }});
-        Cursor c = db.getReadableDatabase().rawQuery("SELECT id,full_name,username,role,collector_name,active,updated_at FROM users ORDER BY role,full_name", null);
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT id,full_name,username,role,collector_name,active,updated_at,linked_client_id FROM users ORDER BY role,full_name", null);
         try {
             if (!c.moveToFirst()) {
                 addEmpty("No users found.");
@@ -2032,6 +2134,7 @@ public class MainActivity extends Activity {
                 final int id = c.getInt(0);
                 addCard(c.getString(1) + " [" + c.getString(2) + "]",
                         "Role: " + c.getString(3) + "\nCollector: " + safe(c.getString(4)) +
+                                "\nLinked Client: " + fallback(c.getString(7), "None") +
                                 "\nActive: " + (c.getInt(5) == 1 ? "Yes" : "No") +
                                 "\nUpdated: " + safe(c.getString(6)),
                         "Edit / Reset", new View.OnClickListener() { public void onClick(View v) { showUserDialog(id); }});
@@ -2050,10 +2153,11 @@ public class MainActivity extends Activity {
         password.setInputType(0x00000081);
         final EditText role = input("Role: Admin / Cashier / Collector / Viewer");
         final EditText collector = input("Collector Name for Collector role");
+        final EditText linkedClient = input("Linked Client ID for Viewer");
         final EditText active = input("Status: Active / Inactive");
         active.setText("Active");
         if (userId != null) {
-            Cursor c = db.getReadableDatabase().rawQuery("SELECT full_name,username,role,collector_name,active FROM users WHERE id=?", new String[]{String.valueOf(userId)});
+            Cursor c = db.getReadableDatabase().rawQuery("SELECT full_name,username,role,collector_name,active,linked_client_id FROM users WHERE id=?", new String[]{String.valueOf(userId)});
             if (c.moveToFirst()) {
                 fullName.setText(c.getString(0));
                 username.setText(c.getString(1));
@@ -2061,6 +2165,7 @@ public class MainActivity extends Activity {
                 role.setText(c.getString(2));
                 collector.setText(c.getString(3));
                 active.setText(c.getInt(4) == 1 ? "Active" : "Inactive");
+                linkedClient.setText(c.getString(5));
             }
             c.close();
         } else {
@@ -2074,11 +2179,17 @@ public class MainActivity extends Activity {
         pickCollector.setText("Pick Collector");
         pickCollector.setAllCaps(false);
         pickCollector.setOnClickListener(v -> showCollectorPicker(collector));
+        final TextView linkedClientLabel = new TextView(this);
+        linkedClientLabel.setText("Viewer linked borrower: " + fallback(text(linkedClient), "None"));
+        Button pickLinkedClient = new Button(this);
+        pickLinkedClient.setText("Pick Viewer Borrower");
+        pickLinkedClient.setAllCaps(false);
+        pickLinkedClient.setOnClickListener(v -> showBorrowerPicker(linkedClient, linkedClientLabel));
         Button pickActive = new Button(this);
         pickActive.setText("Pick Active Status");
         pickActive.setAllCaps(false);
         pickActive.setOnClickListener(v -> showOptionPicker("Active", active, ACTIVE_OPTIONS));
-        form.addView(fullName); form.addView(username); form.addView(password); form.addView(role); form.addView(pickRole); form.addView(collector); form.addView(pickCollector); form.addView(active); form.addView(pickActive);
+        form.addView(fullName); form.addView(username); form.addView(password); form.addView(role); form.addView(pickRole); form.addView(collector); form.addView(pickCollector); form.addView(linkedClientLabel); form.addView(linkedClient); form.addView(pickLinkedClient); form.addView(active); form.addView(pickActive);
         new AlertDialog.Builder(this)
                 .setTitle(userId == null ? "Add User" : "Edit User")
                 .setView(form)
@@ -2089,6 +2200,7 @@ public class MainActivity extends Activity {
                     String normalizedRole = normalizeRole(text(role));
                     if (normalizedRole.isEmpty()) { toast("Role must be Admin, Cashier, Collector, or Viewer."); return; }
                     if ("Collector".equals(normalizedRole) && canonicalCollector(text(collector)).isEmpty()) { toast("Collector role requires a picked collector name."); return; }
+                    if ("Viewer".equals(normalizedRole) && findClient(text(linkedClient)) == null) { toast("Viewer role requires a linked borrower/client."); return; }
                     SQLiteDatabase s = db.getWritableDatabase();
                     ContentValues v = new ContentValues();
                     v.put("full_name", text(fullName));
@@ -2096,6 +2208,7 @@ public class MainActivity extends Activity {
                     if (!blank(password)) v.put("password_hash", hashPassword(text(password)));
                     v.put("role", normalizedRole);
                     v.put("collector_name", canonicalCollector(text(collector)));
+                    v.put("linked_client_id", "Viewer".equals(normalizedRole) ? text(linkedClient) : "");
                     v.put("active", isInactiveText(text(active)) ? 0 : 1);
                     v.put("updated_at", now());
                     if (userId == null) {
@@ -2163,6 +2276,7 @@ public class MainActivity extends Activity {
     }
 
     private void showClients() {
+        if (isViewer()) { showClientPortalDashboard(); return; }
         clear("Clients");
         if (canAddClient()) addAction("Add Client", new View.OnClickListener() { public void onClick(View v) { showClientDialog(); }});
         addAction("Search Clients", new View.OnClickListener() { public void onClick(View v) { showClientSearchDialog(); }});
@@ -2208,12 +2322,12 @@ public class MainActivity extends Activity {
     }
 
     private void showBorrowerProfile(final String clientId) {
-        if (isCollector() && !collectorOwnsClient(clientId)) { notAllowed(); return; }
+        if (!canAccessClient(clientId)) { notAllowed(); return; }
         Cursor c = db.getReadableDatabase().rawQuery("SELECT client_id,name,phone,address,enrolled_date,status,active_loans,total_outstanding,employment,collector,valid_id_no,valid_id_file,photo_file FROM clients WHERE client_id=?", new String[]{clientId});
         try {
             if (!c.moveToFirst()) { toast("Borrower not found."); return; }
             clear("Borrower Profile");
-            addProfileHeader("← Back", new View.OnClickListener() { public void onClick(View v) { showClients(); }},
+            addProfileHeader("Back", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showClients(); }},
                     safe(c.getString(1)), "Client ID: " + safe(c.getString(0)), fallback(c.getString(5), "Active"), c.getString(12));
             addCard("Account Summary",
                     "Contact: " + fallback(c.getString(2), "No phone") +
@@ -2226,7 +2340,7 @@ public class MainActivity extends Activity {
             addAttachmentPreview("Borrower Photo", c.getString(12));
             addAttachmentPreview("Valid ID File", c.getString(11));
             addSection("Actions");
-            addProfileMenuItem("▤", "Loan History", "View all loans for this borrower.", new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId); }});
+            addProfileMenuItem("▤", "Loan History", "View all loans for this borrower.", new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "All"); }});
             addProfileMenuItem("₱", "Payment / Transaction History", "View payments and reprint receipts.", canViewPaymentHistory() ? new View.OnClickListener() { public void onClick(View v) { showPaymentHistoryForClient(clientId); }} : null);
             addProfileMenuItem("●", "Active Loan Details", "Open the active or latest loan.", new View.OnClickListener() { public void onClick(View v) { showLatestLoanDetailsForClient(clientId); }});
             addProfileMenuItem("≡", "Repayment Schedule", "Open the active or latest schedule.", new View.OnClickListener() { public void onClick(View v) { showLatestScheduleForClient(clientId); }});
@@ -2307,10 +2421,28 @@ public class MainActivity extends Activity {
         showRepaymentSchedule(loanId);
     }
 
-    private void showBorrowerLoanHistory(String clientId) {
+    private void showBorrowerLoanHistory(final String clientId, final String filter) {
+        if (!canAccessClient(clientId)) { notAllowed(); return; }
         clear("Borrower Loan History");
-        addAction("Back to Profile", new View.OnClickListener() { public void onClick(View v) { showBorrowerProfile(clientId); }});
-        showLoanRows(scopedLoanRowsSql("client_id=? ORDER BY release_date DESC"), isCollector() ? new String[]{clientId, safe(currentUser.collectorName)} : new String[]{clientId});
+        addBack("Back to Profile", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showBorrowerProfile(clientId); }});
+        addActionRow(content, new String[]{"Active", "Completed", "Cancelled", "Overdue", "All"}, new View.OnClickListener[]{
+                new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "Active"); }},
+                new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "Completed"); }},
+                new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "Cancelled"); }},
+                new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "Overdue"); }},
+                new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "All"); }}
+        });
+        String where = "client_id=?";
+        ArrayList<String> args = new ArrayList<>();
+        args.add(clientId);
+        String f = safe(filter).toLowerCase(Locale.US);
+        if ("active".equals(f)) where += " AND status='Active'";
+        else if ("completed".equals(f)) where += " AND status='Paid'";
+        else if ("cancelled".equals(f)) where += " AND status='Cancelled'";
+        else if ("overdue".equals(f)) where += " AND status='Active' AND loan_id IN (SELECT loan_id FROM schedule WHERE status!='Paid' AND due_date<?)";
+        if ("overdue".equals(f)) args.add(ISO.format(new Date()));
+        if (isCollector()) args.add(safe(currentUser.collectorName));
+        showLoanRows(scopedLoanRowsSql(where + " ORDER BY release_date DESC"), args.toArray(new String[0]));
     }
 
     private String latestLoanIdForClient(String clientId) {
@@ -2335,6 +2467,7 @@ public class MainActivity extends Activity {
     }
 
     private void showLoans() {
+        if (isViewer()) { showBorrowerLoanHistory(viewerClientId(), "All"); return; }
         showLoansFiltered("Active");
     }
 
@@ -2788,11 +2921,12 @@ public class MainActivity extends Activity {
     }
 
     private void showLoanDetails(final String loanId) {
-        if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        if (!canAccessLoan(loanId)) { notAllowed(); return; }
         Cursor c = db.getReadableDatabase().rawQuery("SELECT loan_id,client_name,principal,interest_rate,total_due,balance,term_weeks,weekly_due,release_date,maturity_date,collector,released_thru,status,next_due_date,terms,reference_number FROM loans WHERE loan_id=?", new String[]{loanId});
         try {
             if (!c.moveToFirst()) { toast("Loan not found."); return; }
             clear("Loan Details");
+            addBack("Back", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showLoans(); }});
             addLoanDetailHero(c.getString(0), c.getString(1), c.getString(12), c.getDouble(5), c.getString(13),
                     new String[]{canPostPayment() ? "Collect" : null, "Schedule", "History", canPrintLoanReleaseForm(loanId) ? "Loan Form" : null},
                     new View.OnClickListener[]{
@@ -2843,11 +2977,12 @@ public class MainActivity extends Activity {
     }
 
     private void showRepaymentSchedule(final String loanId) {
-        if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        if (!canAccessLoan(loanId)) { notAllowed(); return; }
         Cursor loan = db.getReadableDatabase().rawQuery("SELECT client_name,principal,total_due,term_weeks,balance,status FROM loans WHERE loan_id=?", new String[]{loanId});
         try {
             if (!loan.moveToFirst()) { toast("Loan not found."); return; }
             clear("Repayment Schedule");
+            addBack("Back to Loan Details", new View.OnClickListener() { public void onClick(View v) { showLoanDetails(loanId); }});
             double totalPaid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(paid_to_date),0) FROM schedule WHERE loan_id=?", new String[]{loanId});
             addCard("Loan " + loanId,
                     statusBadge(loan.getString(5)) +
@@ -3237,6 +3372,7 @@ public class MainActivity extends Activity {
         if (!canOpenReport("Collector Performance")) { notAllowed(); return; }
         clear("Collector Performance Report");
         addAction("Back to Reports", new View.OnClickListener() { public void onClick(View v) { showReportsMenu(); }});
+        addAction("Print Report", new View.OnClickListener() { public void onClick(View v) { printCollectorPerformanceReport(f); }});
         ArrayList<String> collectors = new ArrayList<>();
         if (!isAll(f.collector)) collectors.add(f.collector);
         else if (isCollector()) collectors.add(currentUser.collectorName);
@@ -3494,14 +3630,20 @@ public class MainActivity extends Activity {
         if (collectors.isEmpty()) { addEmpty("No commission ledger entries found."); return; }
         StringBuilder summary = new StringBuilder("Commission Summary");
         for (String collector : collectors) {
+            CommissionSetting setting = getCollectorCommissionSetting(collector);
+            int eligible = fullyPaidEligibleLoanCount(collector);
+            double expectedCommission = expectedCommissionForCollector(collector);
             double availableEarned = commissionStatusTotal(collector, "Available");
             double released = -commissionStatusTotal(collector, "Released");
             double held = commissionStatusTotal(collector, "Held");
             double reversed = commissionStatusTotal(collector, "Reversed");
             double remaining = commissionAvailable(collector);
-            summary.append("\n").append(collector).append(" remaining ").append(peso(remaining));
+            summary.append("\n").append(collector).append(" expected ").append(peso(expectedCommission)).append(", remaining ").append(peso(remaining));
             addCard((titlePrefix == null ? "" : titlePrefix + " - ") + collector,
-                    "Available Earned: " + peso(availableEarned) + "\nReleased: " + peso(released) +
+                    "Collector Rate: " + percent(setting.rate) +
+                            "\nFully Paid Eligible Accounts: " + eligible +
+                            "\nExpected Commission: " + peso(expectedCommission) +
+                            "\nAvailable Earned: " + peso(availableEarned) + "\nReleased: " + peso(released) +
                             "\nHeld: " + peso(held) + "\nReversed: " + peso(reversed) +
                             "\nRemaining Balance: " + peso(remaining),
                     (String) null, (View.OnClickListener) null);
@@ -3957,8 +4099,9 @@ public class MainActivity extends Activity {
     private void showPaymentHistoryForLoan(String loanId) {
         if (!requirePermission(canViewPaymentHistory())) return;
         LoanRow lr = findLoan(loanId);
-        if (lr != null && isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        if (lr != null && !canAccessLoan(loanId)) { notAllowed(); return; }
         clear("Payment History");
+        addBack("Back", new View.OnClickListener() { public void onClick(View v) { showLoanDetails(loanId); }});
         if (lr == null) {
             addEmpty("Loan not found.");
             return;
@@ -3970,8 +4113,9 @@ public class MainActivity extends Activity {
 
     private void showPaymentHistoryForClient(String clientId) {
         if (!requirePermission(canViewPaymentHistory())) return;
-        if (isCollector() && !collectorOwnsClient(clientId)) { notAllowed(); return; }
+        if (!canAccessClient(clientId)) { notAllowed(); return; }
         clear("Borrower Payment History");
+        addBack("Back to Profile", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showBorrowerProfile(clientId); }});
         showPaymentRows("SELECT payment_id,receipt_number,payment_date,amount,method,posted_by,remarks,voided,void_reason FROM repayments WHERE client_id=? ORDER BY payment_date DESC, encoded_at DESC",
                 new String[]{clientId});
     }
@@ -4134,6 +4278,10 @@ public class MainActivity extends Activity {
     }
 
     private void showPassbookPrompt() {
+        if (isViewer()) {
+            printLatestPassbookForClient(viewerClientId());
+            return;
+        }
         final EditText loanId = input("Loan ID");
         final TextView selectedLoan = new TextView(this);
         selectedLoan.setText("No loan selected.");
@@ -4157,8 +4305,9 @@ public class MainActivity extends Activity {
         if (!requirePermission(canPrintPassbook())) return;
         LoanRow lr = findLoan(loanId);
         if (lr == null) { toast("Loan not found."); return; }
-        if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        if (!canAccessLoan(loanId)) { notAllowed(); return; }
         LoanDetail detail = findLoanDetail(loanId);
+        double totalPaid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE loan_id=? AND voided=0", new String[]{loanId});
         StringBuilder rows = new StringBuilder();
         Cursor c = db.getReadableDatabase().rawQuery("SELECT installment_no,due_date,scheduled_amount,paid_to_date,status FROM schedule WHERE loan_id=? ORDER BY installment_no", new String[]{loanId});
         try {
@@ -4183,28 +4332,24 @@ public class MainActivity extends Activity {
                 "<h1>BORROWER PASSBOOK</h1>" +
                 metaTable(new String[][]{
                         {"Borrower", lr.clientName},
+                        {"Client ID", lr.clientId},
                         {"Loan Account Number", lr.id},
                         {"Principal", detail == null ? "" : peso(detail.principal)},
                         {"Total Payable", peso(lr.totalDue)},
+                        {"Total Paid", peso(totalPaid)},
                         {"Balance", peso(lr.balance)},
+                        {"Status", lr.status},
                         {"Collector", detail == null ? "" : detail.collector}
                 }) +
                 "<h2>Payment Schedule</h2><table><tr><th>#</th><th>Due Date</th><th>Due</th><th>Paid</th><th>Status</th><th>Collector Signature</th></tr>" + rows + "</table>" +
                 "<h2>Payment History</h2><table><tr><th>Date Paid</th><th>Amount Paid</th><th>Balance</th><th>Receipt #</th><th>Method</th><th>Collector</th></tr>" + payments + "</table>";
-        String html = htmlPage("Borrower Passbook", body);
-        WebView web = new WebView(this);
-        web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
-        web.postDelayed(() -> {
-            PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
-            if (pm != null) pm.print("Passbook-" + loanId, web.createPrintDocumentAdapter("Passbook-" + loanId), new PrintAttributes.Builder().build());
-        }, 800);
-        audit(db.getWritableDatabase(), "Passbook print/PDF generated", "loan", loanId, "Generated passbook print/PDF for " + loanId, currentUsername());
+        printHtml("Passbook-" + loanId, htmlPage("Borrower Passbook", body), "Passbook print/PDF generated", "loan", loanId, "Generated passbook print/PDF for " + loanId);
     }
 
     private void printRepaymentSchedule(String loanId) {
         LoanRow lr = findLoan(loanId);
         if (lr == null) { toast("Loan not found."); return; }
-        if (isCollector() && !collectorOwnsLoan(loanId)) { notAllowed(); return; }
+        if (!canAccessLoan(loanId)) { notAllowed(); return; }
         LoanDetail detail = findLoanDetail(loanId);
         double totalPaid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(paid_to_date),0) FROM schedule WHERE loan_id=?", new String[]{loanId});
         StringBuilder rows = new StringBuilder();
@@ -4241,6 +4386,12 @@ public class MainActivity extends Activity {
 
     private void showPaymentReceiptScreen(final String paymentId) {
         clear("Payment Receipt");
+        addBack("Back", new View.OnClickListener() { public void onClick(View v) {
+            PaymentRow pr = findPayment(paymentId);
+            if (pr != null) showPaymentHistoryForLoan(pr.loanId);
+            else if (isViewer()) showClientPortalDashboard();
+            else showLoans();
+        }});
         addCard("✓ Payment Posted", paymentReceiptSummary(paymentId),
                 new String[]{"Print Receipt", "Payment History", "Back to Loans"},
                 new View.OnClickListener[]{
@@ -4721,6 +4872,16 @@ public class MainActivity extends Activity {
         return scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(computed_commission),0) FROM commission_ledger WHERE UPPER(COALESCE(collector,''))=UPPER(?) AND status IN ('Available','Released')", new String[]{collector});
     }
 
+    private int fullyPaidEligibleLoanCount(String collector) {
+        return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Paid' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
+    }
+
+    private double expectedCommissionForCollector(String collector) {
+        CommissionSetting setting = getCollectorCommissionSetting(collector);
+        double principal = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(principal),0) FROM loans WHERE status='Paid' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
+        return round2(principal * setting.rate);
+    }
+
     private String nextCommissionReleaseNumber(SQLiteDatabase s) {
         String day = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
         int n = scalarInt(s, "SELECT COUNT(*) FROM commission_releases WHERE release_number LIKE ?", new String[]{"COM-" + day + "-%"}) + 1;
@@ -4757,11 +4918,11 @@ public class MainActivity extends Activity {
     }
 
     private UserRow authenticate(String username, String password) {
-        Cursor c = db.getReadableDatabase().rawQuery("SELECT id,full_name,username,role,collector_name,active FROM users WHERE username=? AND password_hash=?",
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT id,full_name,username,role,collector_name,active,linked_client_id FROM users WHERE username=? AND password_hash=?",
                 new String[]{safe(username), hashPassword(safe(password))});
         try {
             if (!c.moveToFirst() || c.getInt(5) != 1) return null;
-            return new UserRow(c.getInt(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4));
+            return new UserRow(c.getInt(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getString(6));
         } finally {
             c.close();
         }
@@ -4802,6 +4963,7 @@ public class MainActivity extends Activity {
     private boolean isCashier() { return currentUser != null && "Cashier".equals(currentUser.role); }
     private boolean isCollector() { return currentUser != null && "Collector".equals(currentUser.role); }
     private boolean isViewer() { return currentUser != null && "Viewer".equals(currentUser.role); }
+    private String viewerClientId() { return currentUser == null ? "" : safe(currentUser.linkedClientId); }
     private boolean canAddClient() { return isAdmin(); }
     private boolean canEditClient() { return isAdmin(); }
     private boolean canReleaseLoan() { return isAdmin(); }
@@ -4809,17 +4971,19 @@ public class MainActivity extends Activity {
     private boolean canViewPaymentHistory() { return isAdmin() || isCashier() || isCollector() || isViewer(); }
     private boolean canVoidPayment() { return isAdmin(); }
     private boolean canCancelLoan() { return isAdmin(); }
-    private boolean canPrintPassbook() { return isAdmin() || isCollector(); }
+    private boolean canPrintPassbook() { return isAdmin() || isCollector() || isViewer(); }
     private boolean canPrintCollectionSheet() { return isAdmin() || isCashier() || isCollector(); }
     private boolean canPrintLoanReleaseForm(String loanId) {
         if (isAdmin() || isCashier()) return true;
         return isCollector() && collectorOwnsLoan(loanId);
     }
     private boolean canPrintReceipt(String paymentId) {
-        if (!(isAdmin() || isCashier() || isCollector())) return false;
+        if (!(isAdmin() || isCashier() || isCollector() || isViewer())) return false;
         PaymentRow pr = findPayment(paymentId);
         if (pr == null) return false;
-        return !isCollector() || collectorOwnsLoan(pr.loanId);
+        if (isCollector()) return collectorOwnsLoan(pr.loanId);
+        if (isViewer()) return viewerOwnsLoan(pr.loanId);
+        return true;
     }
 
     private boolean requireAdmin() {
@@ -4895,6 +5059,27 @@ public class MainActivity extends Activity {
         return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE loan_id=? AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{loanId, collector}) > 0;
     }
 
+    private boolean viewerOwnsClient(String clientId) {
+        return isViewer() && !viewerClientId().isEmpty() && viewerClientId().equals(clientId);
+    }
+
+    private boolean viewerOwnsLoan(String loanId) {
+        if (!isViewer() || viewerClientId().isEmpty()) return false;
+        return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE loan_id=? AND client_id=?", new String[]{loanId, viewerClientId()}) > 0;
+    }
+
+    private boolean canAccessClient(String clientId) {
+        if (isViewer()) return viewerOwnsClient(clientId);
+        if (isCollector()) return collectorOwnsClient(clientId);
+        return isAdmin() || isCashier();
+    }
+
+    private boolean canAccessLoan(String loanId) {
+        if (isViewer()) return viewerOwnsLoan(loanId);
+        if (isCollector()) return collectorOwnsLoan(loanId);
+        return isAdmin() || isCashier();
+    }
+
     private String[] scopedArgs() {
         return isCollector() ? new String[]{safe(currentUser.collectorName)} : null;
     }
@@ -4957,17 +5142,18 @@ public class MainActivity extends Activity {
     }
 
     private boolean canViewReports() {
-        return currentUser != null;
+        return currentUser != null && !isViewer();
     }
 
     private boolean canOpenReport(String report) {
-        if (isAdmin() || isViewer() || isCollector()) return true;
+        if (isViewer()) return false;
+        if (isAdmin() || isCollector()) return true;
         if (!isCashier()) return false;
         return report.contains("Collection") || report.contains("Overdue") || report.contains("Voided") || report.contains("Fully Paid") || report.contains("Commission");
     }
 
     private boolean canViewCommissionReports() {
-        return isAdmin() || isCashier() || isCollector() || isViewer();
+        return isAdmin() || isCashier() || isCollector();
     }
 
     private boolean isAll(String value) {
@@ -5118,16 +5304,19 @@ public class MainActivity extends Activity {
         }
         StringBuilder rows = new StringBuilder();
         for (String collector : collectors) {
+            CommissionSetting setting = getCollectorCommissionSetting(collector);
+            int eligible = fullyPaidEligibleLoanCount(collector);
+            double expectedCommission = expectedCommissionForCollector(collector);
             double availableEarned = commissionStatusTotal(collector, "Available");
             double released = -commissionStatusTotal(collector, "Released");
             double held = commissionStatusTotal(collector, "Held");
             double reversed = commissionStatusTotal(collector, "Reversed");
             double remaining = commissionAvailable(collector);
-            rows.append(tr(td(collector) + td(peso(availableEarned)) + td(peso(released)) + td(peso(held)) + td(peso(reversed)) + td(peso(remaining))));
+            rows.append(tr(td(collector) + td(percent(setting.rate)) + td(String.valueOf(eligible)) + td(peso(expectedCommission)) + td(peso(availableEarned)) + td(peso(released)) + td(peso(held)) + td(peso(reversed)) + td(peso(remaining))));
         }
-        if (rows.length() == 0) rows.append(tr("<td colspan='6'>No commission ledger entries found.</td>"));
+        if (rows.length() == 0) rows.append(tr("<td colspan='9'>No commission ledger entries found.</td>"));
         String body = reportHeader("Commission Summary Report", "Printed by: " + currentUsername()) +
-                table(new String[]{"Collector", "Available Earned", "Released", "Held", "Reversed", "Remaining Balance"}, rows.toString());
+                table(new String[]{"Collector", "Rate", "Eligible Paid Loans", "Expected Commission", "Available Earned", "Released", "Held", "Reversed", "Remaining Balance"}, rows.toString());
         printHtml("CommissionSummary", htmlPage("Commission Summary Report", body), "Report print/PDF generated", "report", "Commission Summary", "Generated Commission Summary Report print/PDF");
     }
 
@@ -5142,6 +5331,36 @@ public class MainActivity extends Activity {
         String body = reportHeader("Commission Release Report", "Collector: " + (isCollector() ? currentUser.collectorName : (isAll(collectorFilter) ? "All" : collectorFilter))) +
                 table(new String[]{"Release Number", "Date/Time", "Collector", "Amount", "Method", "Released By", "Remarks", "Status"}, rows);
         printHtml("CommissionReleaseReport", htmlPage("Commission Release Report", body), "Report print/PDF generated", "report", "Commission Release", "Generated Commission Release Report print/PDF");
+    }
+
+    private void printCollectorPerformanceReport(ReportFilter f) {
+        if (!canOpenReport("Collector Performance")) { notAllowed(); return; }
+        ArrayList<String> collectors = new ArrayList<>();
+        if (!isAll(f.collector)) collectors.add(f.collector);
+        else if (isCollector()) collectors.add(currentUser.collectorName);
+        else {
+            Cursor c = db.getReadableDatabase().rawQuery("SELECT DISTINCT collector FROM loans WHERE COALESCE(collector,'')!='' ORDER BY collector", null);
+            try { while (c.moveToNext()) collectors.add(c.getString(0)); } finally { c.close(); }
+        }
+        StringBuilder rows = new StringBuilder();
+        for (String collector : collectors) {
+            String[] arg = new String[]{collector};
+            int borrowers = scalarInt(db.getReadableDatabase(), "SELECT COUNT(DISTINCT client_id) FROM loans WHERE UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+            int active = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+            double principal = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(principal),0) FROM loans WHERE UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+            double expectedCollection = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(s.scheduled_amount),0) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.due_date BETWEEN ? AND ? AND UPPER(COALESCE(l.collector,''))=UPPER(?)", new String[]{f.startDate, f.endDate, collector});
+            double actual = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND r.payment_date BETWEEN ? AND ? AND UPPER(COALESCE(l.collector,''))=UPPER(?)", new String[]{f.startDate, f.endDate, collector});
+            int paid = fullyPaidEligibleLoanCount(collector);
+            double expectedCommission = expectedCommissionForCollector(collector);
+            double available = commissionAvailable(collector);
+            double rate = expectedCollection > 0 ? (actual / expectedCollection) * 100.0 : 0;
+            rows.append(tr(td(collector) + td(String.valueOf(borrowers)) + td(String.valueOf(active)) + td(peso(principal)) +
+                    td(peso(expectedCollection)) + td(peso(actual)) + td(String.format(Locale.US, "%.1f%%", rate)) +
+                    td(String.valueOf(paid)) + td(peso(expectedCommission)) + td(peso(available))));
+        }
+        String body = reportHeader("Collector Performance Report", "Range: " + f.startDate + " to " + f.endDate) +
+                table(new String[]{"Collector", "Borrowers", "Active Loans", "Principal", "Expected Collection", "Actual Collection", "Collection Rate", "Fully Paid", "Expected Commission", "Available Commission"}, rows.toString());
+        printHtml("CollectorPerformance-" + f.startDate, htmlPage("Collector Performance Report", body), "Report print/PDF generated", "report", "Collector Performance", "Generated Collector Performance Report print/PDF");
     }
 
     private void addCopySummary(final String summary) {
@@ -5963,10 +6182,41 @@ public class MainActivity extends Activity {
         WebView web = new WebView(this);
         web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
         web.postDelayed(() -> {
-            PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
-            if (pm != null) pm.print(jobName, web.createPrintDocumentAdapter(jobName), new PrintAttributes.Builder().build());
+            try {
+                PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+                if (pm != null) {
+                    pm.print(jobName, web.createPrintDocumentAdapter(jobName), new PrintAttributes.Builder().build());
+                    toast("Print dialog opened. Choose printer or Save as PDF.");
+                } else {
+                    showPrintablePreview(jobName, html);
+                }
+            } catch (Exception ex) {
+                toast("Print dialog unavailable. Showing printable preview.");
+                showPrintablePreview(jobName, html);
+            }
         }, 800);
         audit(db.getWritableDatabase(), auditAction, entityType, entityId, details, currentUsername());
+    }
+
+    private void showPrintablePreview(final String jobName, final String html) {
+        clear("Printable Preview");
+        addBack("Back", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showDashboard(); }});
+        addAction("Print / Save as PDF", new View.OnClickListener() { public void onClick(View v) {
+            WebView web = new WebView(MainActivity.this);
+            web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+            web.postDelayed(() -> {
+                try {
+                    PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+                    if (pm != null) pm.print(jobName, web.createPrintDocumentAdapter(jobName), new PrintAttributes.Builder().build());
+                    else toast("No Android print service is available on this device.");
+                } catch (Exception ex) {
+                    toast("No Android print service is available on this device.");
+                }
+            }, 500);
+        }});
+        WebView preview = new WebView(this);
+        preview.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+        content.addView(preview, new LinearLayout.LayoutParams(-1, dp(520)));
     }
     private String htmlRows(String sql, String[] args, int[] moneyColumns) {
         StringBuilder rows = new StringBuilder();
@@ -6169,13 +6419,14 @@ public class MainActivity extends Activity {
 
     private static class UserRow {
         final int id;
-        final String fullName, username, role, collectorName;
-        UserRow(int id, String fullName, String username, String role, String collectorName) {
+        final String fullName, username, role, collectorName, linkedClientId;
+        UserRow(int id, String fullName, String username, String role, String collectorName, String linkedClientId) {
             this.id = id;
             this.fullName = fullName;
             this.username = username;
             this.role = role;
             this.collectorName = collectorName;
+            this.linkedClientId = linkedClientId;
         }
     }
 
@@ -6282,7 +6533,7 @@ public class MainActivity extends Activity {
             db.execSQL("CREATE TABLE collector_commission_rates(id INTEGER PRIMARY KEY AUTOINCREMENT,collector_name TEXT,collector_user_id INTEGER DEFAULT 0,commission_rate REAL,commission_type TEXT,active INTEGER DEFAULT 1,effective_date TEXT,created_at TEXT,updated_at TEXT)");
             db.execSQL("CREATE TABLE commission_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,collector TEXT,borrower TEXT,loan_id TEXT,receipt_number TEXT,payment_id TEXT,payment_amount REAL,computed_commission REAL,earned_date TEXT,status TEXT,related_payment_id TEXT,related_loan_id TEXT,remarks TEXT)");
             db.execSQL("CREATE TABLE audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,action TEXT,entity_type TEXT,entity_id TEXT,details TEXT,actor TEXT,created_at TEXT)");
-            db.execSQL("CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT,full_name TEXT NOT NULL,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL,collector_name TEXT,active INTEGER DEFAULT 1,created_at TEXT,updated_at TEXT)");
+            db.execSQL("CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT,full_name TEXT NOT NULL,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL,collector_name TEXT,linked_client_id TEXT,active INTEGER DEFAULT 1,created_at TEXT,updated_at TEXT)");
             createIndexes(db);
             seedDefaultAdmin(db);
             seedDefaultCommissionSetting(db);
@@ -6318,7 +6569,8 @@ public class MainActivity extends Activity {
                 createIndexes(db);
             }
             if (oldVersion < 3) {
-                db.execSQL("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,full_name TEXT NOT NULL,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL,collector_name TEXT,active INTEGER DEFAULT 1,created_at TEXT,updated_at TEXT)");
+                db.execSQL("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,full_name TEXT NOT NULL,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL,collector_name TEXT,linked_client_id TEXT,active INTEGER DEFAULT 1,created_at TEXT,updated_at TEXT)");
+                addColumn(db, "users", "linked_client_id TEXT");
                 seedDefaultAdmin(db);
                 createIndexes(db);
             }
@@ -6341,6 +6593,10 @@ public class MainActivity extends Activity {
             }
             if (oldVersion < 6) {
                 addColumn(db, "clients", "photo_file TEXT");
+                createIndexes(db);
+            }
+            if (oldVersion < 7) {
+                addColumn(db, "users", "linked_client_id TEXT");
                 createIndexes(db);
             }
         }
@@ -6366,6 +6622,7 @@ public class MainActivity extends Activity {
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type,entity_id)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_users_linked_client ON users(linked_client_id)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_commission_ledger_collector ON commission_ledger(collector)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_commission_ledger_payment ON commission_ledger(related_payment_id)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_commission_ledger_status ON commission_ledger(status)");
