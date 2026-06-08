@@ -37,7 +37,7 @@ The project uses Android Gradle Plugin `8.5.2`, `compileSdk 35`, and no third-pa
 
 Project release settings:
 
-- App name: `A&L Alalay Loan Tracker`
+- App name: `A&L Alalay`
 - Package/application ID: `com.alalay.loantracker`
 - `versionCode`: `1`
 - `versionName`: `1.0`
@@ -45,7 +45,7 @@ Project release settings:
 - `targetSdk`: `35`
 - `compileSdk`: `35`
 - `android:allowBackup`: `false`
-- Launcher icon: `app/src/main/res/drawable/ic_launcher.xml` placeholder
+- Launcher icon: generated from `app/src/main/res/drawable/alalay_logo.png` into `app/src/main/res/mipmap-*`
 - Gradle compileSdk warning suppression: `android.suppressUnsupportedCompileSdk=35`
 
 ## APK Builds and Install
@@ -69,24 +69,45 @@ app/build/outputs/apk/debug/app-debug.apk
 
 Release APK:
 
+Create a private local keystore first. This project reads release signing values from an ignored `keystore.properties` file in the project root.
+
+Example local signing files:
+
+```text
+signing/alalay-release.jks
+keystore.properties
+```
+
+`keystore.properties` format:
+
+```properties
+storeFile=signing/alalay-release.jks
+storePassword=your-private-password
+keyAlias=alalay_release
+keyPassword=your-private-password
+```
+
+Do not commit the keystore or signing passwords.
+
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
 .\gradlew.bat :app:assembleRelease
 ```
 
-Release output:
+Signed release output:
 
 ```text
-app/build/outputs/apk/release/
+app/build/outputs/apk/release/app-release.apk
 ```
 
-If Gradle produces an unsigned release APK, sign it with Android Studio or a private local signing config before installing it for daily use.
+If `keystore.properties` is missing, Gradle may produce an unsigned release APK. For daily use, install only the signed release APK built with your private local signing key.
 
 Signing notes:
 
 - Debug APKs are only for testing.
-- A release APK should be signed with a private Android signing key in Android Studio or a local signing config.
+- A release APK should be signed with a private Android signing key in Android Studio or the local `keystore.properties` config.
 - Do not commit `.jks`, `.keystore`, `keystore.properties`, or signing passwords.
+- Keep the same release keystore for future app updates. Android will reject updates signed with a different key unless the old app is uninstalled first.
 
 Install on a phone:
 
@@ -99,7 +120,14 @@ ADB install example:
 
 ```powershell
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
+
+Attachment reminder:
+
+- JSON backups include attachment references.
+- If attachment image/file bundling is not implemented, copy `Android/data/com.alalay.loantracker/files/attachments/` separately before replacing, resetting, or migrating a phone.
+- Always create an encrypted backup before app updates, restore tests, or CSV imports.
 
 ## Final Test Checklist
 
