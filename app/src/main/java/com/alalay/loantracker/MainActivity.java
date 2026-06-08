@@ -107,8 +107,8 @@ public class MainActivity extends Activity {
     private static final int REQ_IMPORT_CSV = 502;
     private static final int REQ_ATTACH_CLIENT_PHOTO = 503;
     private static final int REQ_ATTACH_CLIENT_ID = 504;
-    private static final int APP_DB_VERSION = 7;
-    private static final String[] BACKUP_TABLES = new String[]{"users", "clients", "loans", "schedule", "repayments", "audit_logs", "commission_settings", "collector_commission_rates", "commission_ledger", "commission_releases"};
+    private static final int APP_DB_VERSION = 8;
+    private static final String[] BACKUP_TABLES = new String[]{"users", "clients", "loans", "schedule", "repayments", "audit_logs", "commission_settings", "collector_commission_rates", "commission_ledger", "commission_releases", "commission_withdrawal_requests", "notifications"};
     private static final String[] GOOGLE_IMPORT_TYPES = new String[]{"Clients", "Loans", "Payment Schedule", "Repayments", "Collector Commission Rates", "Dashboard Reference"};
 
     private Db db;
@@ -615,6 +615,9 @@ public class MainActivity extends Activity {
         if (isViewer()) { showClientPortalDashboard(); return; }
         setActiveNav(NAV_MENU_KEY);
         clear("Menu");
+        addMenuGroup("Notifications", "Local in-app alerts and request updates.",
+                new String[]{"Notifications (" + unreadNotificationCount() + ")"},
+                new View.OnClickListener[]{new View.OnClickListener() { public void onClick(View v) { showNotifications(); }}});
         if (canPostPayment() || canViewPaymentHistory()) {
             addMenuGroup("Daily Operations", "Fast actions for today's work.",
                     new String[]{canPostPayment() ? "Post Payment" : null, canViewPaymentHistory() ? "Payment History" : null},
@@ -700,7 +703,8 @@ public class MainActivity extends Activity {
                     (String) null, (View.OnClickListener) null);
             addProfileMenuItem("☷", "My Assigned Borrowers", "Open assigned borrower list.", new View.OnClickListener() { public void onClick(View v) { showClients(); }});
             addProfileMenuItem("☑", "Collection Sheet", "Open due borrowers and print sheet.", canPrintCollectionSheet() ? new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }} : null);
-            addProfileMenuItem("%", "My Commission", "View commission summary.", canViewCommissionReports() ? new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }} : null);
+            addProfileMenuItem("%", "My Commission", "View commission summary and request withdrawal.", canViewCommissionReports() ? new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }} : null);
+            addProfileMenuItem("₱", "Request Commission Withdrawal", "Request release of available earned commission.", canViewCommissionReports() ? new View.OnClickListener() { public void onClick(View v) { showCommissionWithdrawalRequestDialog(); }} : null);
             addProfileMenuItem("₱", "Transaction History", "Search payment history.", canViewPaymentHistory() ? new View.OnClickListener() { public void onClick(View v) { showSearchMenu(); }} : null);
         } else if (isAdmin()) {
             int users = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM users WHERE active=1", null);
@@ -801,10 +805,11 @@ public class MainActivity extends Activity {
                         new View.OnClickListener() { public void onClick(View v) { showUsers(); }},
                         new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }}
                 });
-        addMenuGroup("Commission Tools", "Rates, releases, history, and recalculation.",
-                new String[]{"[rate] Commission Settings", "[release] Commission Release", "[history] Release History", "[recalc] Recalculate Commission"},
+        addMenuGroup("Commission Tools", "Rates, requests, releases, history, and recalculation.",
+                new String[]{"[rate] Commission Settings", "[request] Withdrawal Requests", "[release] Commission Release", "[history] Release History", "[recalc] Recalculate Commission"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() { public void onClick(View v) { showCommissionSettings(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showCommissionWithdrawalRequests(); }},
                         new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }},
                         new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }},
                         new View.OnClickListener() { public void onClick(View v) { showRecalculateCommissionDialog(); }}
@@ -1157,6 +1162,9 @@ public class MainActivity extends Activity {
                 (String) null, (View.OnClickListener) null);
         addCard("Commission Rule",
                 "Commission is based on loan principal times collector rate, earned only when a loan becomes fully paid, and reversed if voiding makes the loan unpaid.",
+                (String) null, (View.OnClickListener) null);
+        addCard("Local Notifications",
+                "Notifications are local in-app notifications on this phone. Real push notifications between devices require future Firebase/cloud sync.",
                 (String) null, (View.OnClickListener) null);
         addCard("Collector Restrictions",
                 "Collector users see assigned borrowers and loans only. Their reports, passbooks, collection sheets, and commission views are scoped to their collector name.",
@@ -3810,30 +3818,10 @@ public class MainActivity extends Activity {
                     s.beginTransaction();
                     try {
                         String releaseNo = nextCommissionReleaseNumber(s);
-                        ContentValues rel = new ContentValues();
-                        rel.put("release_number", releaseNo);
-                        rel.put("release_date", releaseDate + " " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()));
-                        rel.put("collector", collector);
-                        rel.put("amount", amount);
-                        rel.put("method", method);
-                        rel.put("remarks", remarks);
-                        rel.put("released_by", currentUsername());
-                        rel.put("status", "Released");
-                        s.insertOrThrow("commission_releases", null, rel);
-                        ContentValues led = new ContentValues();
-                        led.put("collector", collector);
-                        led.put("borrower", "");
-                        led.put("loan_id", "");
-                        led.put("receipt_number", releaseNo);
-                        led.put("payment_id", "");
-                        led.put("payment_amount", 0);
-                        led.put("computed_commission", -amount);
-                        led.put("earned_date", now());
-                        led.put("status", "Released");
-                        led.put("related_loan_id", "");
-                        led.put("related_payment_id", "");
-                        led.put("remarks", remarks);
-                        s.insertOrThrow("commission_ledger", null, led);
+                        insertCommissionReleaseAndLedger(s, releaseNo, collector, amount, method, remarks, releaseDate + " " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()), remarks);
+                        createNotification(s, "Collector", "", collector, "", "Commission released",
+                                "Admin released " + peso(amount) + " commission. Release no: " + releaseNo, "Commission released",
+                                "commission_releases", releaseNo);
                         audit(s, "Commission release", "commission_releases", releaseNo, "Released " + peso(amount) + " to " + collector, currentUsername());
                         s.setTransactionSuccessful();
                         toast("Commission released: " + releaseNo);
@@ -3908,18 +3896,240 @@ public class MainActivity extends Activity {
             double released = -commissionStatusTotal(collector, "Released");
             double held = commissionStatusTotal(collector, "Held");
             double reversed = commissionStatusTotal(collector, "Reversed");
+            double pending = pendingCommissionRequestAmount(collector);
+            double rejected = rejectedCommissionRequestAmount(collector);
             double remaining = commissionAvailable(collector);
             summary.append("\n").append(collector).append(" expected ").append(peso(expectedCommission)).append(", remaining ").append(peso(remaining));
             addCard((titlePrefix == null ? "" : titlePrefix + " - ") + collector,
                     "Collector Rate: " + percent(setting.rate) +
                             "\nFully Paid Eligible Accounts: " + eligible +
                             "\nExpected Commission: " + peso(expectedCommission) +
-                            "\nAvailable Earned: " + peso(availableEarned) + "\nReleased: " + peso(released) +
+                            "\nAvailable for Withdrawal: " + peso(Math.max(0, remaining - pending)) +
+                            "\nPending Withdrawal Requests: " + peso(pending) +
+                            "\nReleased Commission: " + peso(released) +
+                            "\nRejected Requests: " + peso(rejected) +
+                            "\nAvailable Earned: " + peso(availableEarned) +
                             "\nHeld: " + peso(held) + "\nReversed: " + peso(reversed) +
                             "\nRemaining Balance: " + peso(remaining),
-                    (String) null, (View.OnClickListener) null);
+                    isCollector() ? "Request Withdrawal" : null,
+                    isCollector() ? new View.OnClickListener() { public void onClick(View v) { showCommissionWithdrawalRequestDialog(); }} : null);
         }
         addCopySummary(summary.toString());
+    }
+
+    private void showCommissionWithdrawalRequestDialog() {
+        if (!isCollector()) { notAllowed(); return; }
+        final String collector = canonicalCollector(currentUser.collectorName);
+        final double available = commissionAvailable(collector);
+        final double pending = pendingCommissionRequestAmount(collector);
+        final double max = Math.max(0, available - pending);
+        if (max <= 0.009) {
+            toast("No available commission for withdrawal. Available after pending requests: " + peso(max));
+            return;
+        }
+        LinearLayout form = form();
+        form.addView(formNote("Available: " + peso(available) + "\nPending requests: " + peso(pending) + "\nMaximum request: " + peso(max)));
+        final EditText amount = numericInput("Amount to request *");
+        final EditText remarks = input("Remarks / message");
+        form.addView(amount);
+        form.addView(remarks);
+        new AlertDialog.Builder(this)
+                .setTitle("Request Commission Withdrawal")
+                .setView(form)
+                .setPositiveButton("Submit Request", (d, w) -> {
+                    if (!validPositiveDecimal(amount)) { toast("Request amount must be greater than zero."); return; }
+                    double requested = number(amount);
+                    if (requested > max + 0.009) { toast("Request cannot exceed " + peso(max) + "."); return; }
+                    submitCommissionWithdrawalRequest(collector, requested, text(remarks));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void submitCommissionWithdrawalRequest(String collector, double amount, String remarks) {
+        SQLiteDatabase s = db.getWritableDatabase();
+        s.beginTransaction();
+        try {
+            String requestNo = nextCommissionRequestNumber(s);
+            ContentValues v = new ContentValues();
+            v.put("request_no", requestNo);
+            v.put("collector_name", collector);
+            v.put("requested_amount", amount);
+            v.put("approved_amount", 0);
+            v.put("status", "Pending");
+            v.put("requested_by", currentUsername());
+            v.put("requested_at", now());
+            v.put("remarks", remarks);
+            v.put("created_at", now());
+            v.put("updated_at", now());
+            s.insertOrThrow("commission_withdrawal_requests", null, v);
+            createNotification(s, "Admin", "", "", "", "Commission withdrawal requested",
+                    collector + " requested " + peso(amount) + ".", "Commission withdrawal requested",
+                    "commission_withdrawal_requests", requestNo);
+            audit(s, "Commission withdrawal requested", "commission_withdrawal_requests", requestNo,
+                    collector + " requested " + peso(amount), currentUsername());
+            s.setTransactionSuccessful();
+            toast("Request submitted: " + requestNo);
+            showCommissionSummaryReport();
+        } catch (Exception ex) {
+            toast("Request failed: " + ex.getMessage());
+        } finally {
+            s.endTransaction();
+        }
+    }
+
+    private void showCommissionWithdrawalRequests() {
+        if (!isAdmin() && !isCollector()) { notAllowed(); return; }
+        setActiveNav(isAdmin() ? NAV_MENU_KEY : NAV_REPORTS_KEY);
+        rememberScreen(new Runnable() { public void run() { showCommissionWithdrawalRequests(); }});
+        clear("Commission Withdrawal Requests");
+        addBack(isAdmin() ? "Back to Admin Checks" : "Back to Commission", new View.OnClickListener() { public void onClick(View v) { if (isAdmin()) showAdminChecks(); else showCommissionSummaryReport(); }});
+        String where = "1=1";
+        ArrayList<String> args = new ArrayList<>();
+        if (isCollector()) {
+            where += " AND UPPER(COALESCE(collector_name,''))=UPPER(?)";
+            args.add(canonicalCollector(currentUser.collectorName));
+        }
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT request_no,collector_name,requested_amount,approved_amount,status,requested_by,approved_by,requested_at,approved_at,released_at,remarks,admin_remarks FROM commission_withdrawal_requests WHERE " + where + " ORDER BY CASE status WHEN 'Pending' THEN 0 WHEN 'Approved' THEN 1 WHEN 'Released' THEN 2 WHEN 'Rejected' THEN 3 ELSE 4 END, requested_at DESC", args.toArray(new String[0]));
+        try {
+            if (!c.moveToFirst()) { addEmpty("No commission withdrawal requests found."); return; }
+            do {
+                final String requestNo = c.getString(0);
+                final String collector = c.getString(1);
+                final String status = safe(c.getString(4));
+                double available = commissionAvailable(collector);
+                String body = "Collector: " + safe(collector) +
+                        "\nRequested: " + peso(c.getDouble(2)) +
+                        "\nApproved/Released: " + peso(c.getDouble(3)) +
+                        "\nAvailable Now: " + peso(available) +
+                        "\nRequested At: " + safe(c.getString(7)) +
+                        "\nRequested By: " + safe(c.getString(5)) +
+                        "\nMessage: " + fallback(c.getString(10), "None") +
+                        "\nAdmin Remarks: " + fallback(c.getString(11), "None") +
+                        "\nStatus: " + status;
+                if (isAdmin() && "Pending".equalsIgnoreCase(status)) {
+                    addCard(requestNo, body,
+                            new String[]{"Approve and Release", "Reject"},
+                            new View.OnClickListener[]{
+                                    new View.OnClickListener() { public void onClick(View v) { showApproveCommissionRequestDialog(requestNo); }},
+                                    new View.OnClickListener() { public void onClick(View v) { showRejectCommissionRequestDialog(requestNo); }}
+                            });
+                } else {
+                    addCard(requestNo, body, (String) null, null);
+                }
+            } while (c.moveToNext());
+        } finally {
+            c.close();
+        }
+    }
+
+    private void showApproveCommissionRequestDialog(final String requestNo) {
+        if (!requireAdmin()) return;
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT collector_name,requested_amount,status FROM commission_withdrawal_requests WHERE request_no=?", new String[]{requestNo});
+        try {
+            if (!c.moveToFirst()) { toast("Request not found."); return; }
+            final String collector = c.getString(0);
+            final double requested = c.getDouble(1);
+            if (!"Pending".equalsIgnoreCase(c.getString(2))) { toast("Only pending requests can be approved."); return; }
+            final double available = commissionAvailable(collector);
+            final EditText amount = numericInput("Approved amount");
+            amount.setText(String.format(Locale.US, "%.2f", Math.min(requested, available)));
+            final EditText remarks = input("Admin remarks");
+            LinearLayout form = form();
+            form.addView(formNote("Collector: " + collector + "\nRequested: " + peso(requested) + "\nAvailable: " + peso(available)));
+            form.addView(amount);
+            form.addView(remarks);
+            new AlertDialog.Builder(this)
+                    .setTitle("Approve and Release")
+                    .setView(form)
+                    .setPositiveButton("Release", (d, w) -> {
+                        if (!validPositiveDecimal(amount)) { toast("Approved amount must be greater than zero."); return; }
+                        double approved = number(amount);
+                        if (approved > requested + 0.009) { toast("Approved amount cannot exceed requested amount."); return; }
+                        if (approved > available + 0.009) { toast("Approved amount cannot exceed available commission."); return; }
+                        approveCommissionWithdrawalRequest(requestNo, collector, approved, text(remarks));
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        } finally {
+            c.close();
+        }
+    }
+
+    private void approveCommissionWithdrawalRequest(String requestNo, String collector, double amount, String adminRemarks) {
+        SQLiteDatabase s = db.getWritableDatabase();
+        s.beginTransaction();
+        try {
+            String releaseNo = nextCommissionReleaseNumber(s);
+            insertCommissionReleaseAndLedger(s, releaseNo, collector, amount, "Cash", adminRemarks, now(), "Withdrawal request " + requestNo);
+            ContentValues v = new ContentValues();
+            v.put("approved_amount", amount);
+            v.put("status", "Released");
+            v.put("approved_by", currentUsername());
+            v.put("approved_at", now());
+            v.put("released_at", now());
+            v.put("admin_remarks", adminRemarks);
+            v.put("updated_at", now());
+            s.update("commission_withdrawal_requests", v, "request_no=?", new String[]{requestNo});
+            createNotification(s, "Collector", "", collector, "", "Commission request approved",
+                    "Your commission request " + requestNo + " was released for " + peso(amount) + ".", "Commission request approved",
+                    "commission_withdrawal_requests", requestNo);
+            audit(s, "Commission withdrawal approved/released", "commission_withdrawal_requests", requestNo,
+                    "Released " + peso(amount) + " to " + collector, currentUsername());
+            s.setTransactionSuccessful();
+            toast("Request released: " + releaseNo);
+            showCommissionWithdrawalRequests();
+        } catch (Exception ex) {
+            toast("Approval failed: " + ex.getMessage());
+        } finally {
+            s.endTransaction();
+        }
+    }
+
+    private void showRejectCommissionRequestDialog(final String requestNo) {
+        if (!requireAdmin()) return;
+        final EditText reason = input("Reason for rejection *");
+        new AlertDialog.Builder(this)
+                .setTitle("Reject Request")
+                .setView(reason)
+                .setPositiveButton("Reject", (d, w) -> {
+                    if (blank(reason)) { toast("Rejection reason is required."); return; }
+                    rejectCommissionWithdrawalRequest(requestNo, text(reason));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void rejectCommissionWithdrawalRequest(String requestNo, String reason) {
+        SQLiteDatabase s = db.getWritableDatabase();
+        s.beginTransaction();
+        try {
+            Cursor c = s.rawQuery("SELECT collector_name,status FROM commission_withdrawal_requests WHERE request_no=?", new String[]{requestNo});
+            String collector;
+            try {
+                if (!c.moveToFirst()) { toast("Request not found."); return; }
+                collector = c.getString(0);
+                if (!"Pending".equalsIgnoreCase(c.getString(1))) { toast("Only pending requests can be rejected."); return; }
+            } finally { c.close(); }
+            ContentValues v = new ContentValues();
+            v.put("status", "Rejected");
+            v.put("approved_by", currentUsername());
+            v.put("approved_at", now());
+            v.put("admin_remarks", reason);
+            v.put("updated_at", now());
+            s.update("commission_withdrawal_requests", v, "request_no=?", new String[]{requestNo});
+            createNotification(s, "Collector", "", collector, "", "Commission request rejected",
+                    "Your commission request " + requestNo + " was rejected: " + reason, "Commission request rejected",
+                    "commission_withdrawal_requests", requestNo);
+            audit(s, "Commission withdrawal rejected", "commission_withdrawal_requests", requestNo, reason, currentUsername());
+            s.setTransactionSuccessful();
+            toast("Request rejected.");
+            showCommissionWithdrawalRequests();
+        } catch (Exception ex) {
+            toast("Reject failed: " + ex.getMessage());
+        } finally {
+            s.endTransaction();
+        }
     }
 
     private void addScheduleList(String sql, String[] args) {
@@ -4305,6 +4515,10 @@ public class MainActivity extends Activity {
                             s.insertOrThrow("schedule", null, sv);
                         }
                         audit(s, "Release loan", "loan", loanId, "Released " + peso(principal) + " to " + cr.name, currentUsername());
+                        createNotification(s, "Collector", "", collector, "", "Loan assigned/released",
+                                "Loan " + loanId + " was released to " + cr.name + ".", "Loan released", "loan", loanId);
+                        createNotification(s, "Viewer", "", "", cr.id, "Loan released",
+                                "Your loan " + loanId + " has been released.", "Loan released", "loan", loanId);
                         s.setTransactionSuccessful();
                     } finally {
                         s.endTransaction();
@@ -4355,6 +4569,10 @@ public class MainActivity extends Activity {
                         recalcLoan(s, lr.id);
                         recalcClient(s, lr.clientId);
                         audit(s, "Post payment", "repayment", paymentId, "Posted " + peso(amount) + " receipt " + receipt + " for " + lr.id, currentUsername());
+                        createNotification(s, "Collector", "", collector, "", "Payment posted",
+                                "Payment " + receipt + " posted for " + lr.clientName + ": " + peso(amount) + ".", "Payment posted", "repayment", paymentId);
+                        createNotification(s, "Viewer", "", "", lr.clientId, "Payment posted",
+                                "Payment receipt " + receipt + " is available for " + peso(amount) + ".", "Payment posted", "repayment", paymentId);
                         s.setTransactionSuccessful();
                         toast("Payment posted. Receipt: " + receipt);
                         showPaymentReceiptScreen(paymentId);
@@ -4475,6 +4693,11 @@ public class MainActivity extends Activity {
                         recalcLoan(s, pr.loanId);
                         recalcClient(s, pr.clientId);
                         audit(s, "Void payment", "repayment", paymentId, "Voided payment " + paymentId + ": " + reason, user);
+                        LoanDetail notificationLoan = findLoanDetail(s, pr.loanId);
+                        createNotification(s, "Admin", "", "", "", "Payment voided",
+                                "Payment " + paymentId + " was voided: " + reason, "Payment voided", "repayment", paymentId);
+                        createNotification(s, "Collector", "", notificationLoan == null ? "" : notificationLoan.collector, "", "Payment voided",
+                                "Payment " + paymentId + " was voided: " + reason, "Payment voided", "repayment", paymentId);
                         s.setTransactionSuccessful();
                         showPaymentHistoryForLoan(pr.loanId);
                     } catch (Exception ex) {
@@ -4541,6 +4764,13 @@ public class MainActivity extends Activity {
                         s.update("schedule", sv, "loan_id=? AND status!='Paid'", new String[]{loanId});
                         recalcClient(s, lr.clientId);
                         audit(s, "Cancel loan", "loan", loanId, "Cancelled loan: " + reason, user);
+                        LoanDetail notificationLoan = findLoanDetail(s, loanId);
+                        createNotification(s, "Admin", "", "", "", "Loan cancelled",
+                                "Loan " + loanId + " was cancelled: " + reason, "Loan cancelled", "loan", loanId);
+                        createNotification(s, "Collector", "", notificationLoan == null ? "" : notificationLoan.collector, "", "Loan cancelled",
+                                "Loan " + loanId + " was cancelled: " + reason, "Loan cancelled", "loan", loanId);
+                        createNotification(s, "Viewer", "", "", lr.clientId, "Loan cancelled",
+                                "Loan " + loanId + " was cancelled.", "Loan cancelled", "loan", loanId);
                         s.setTransactionSuccessful();
                         showLoans();
                     } catch (Exception ex) {
@@ -5193,6 +5423,14 @@ public class MainActivity extends Activity {
         return scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(computed_commission),0) FROM commission_ledger WHERE UPPER(COALESCE(collector,''))=UPPER(?) AND status IN ('Available','Released')", new String[]{collector});
     }
 
+    private double pendingCommissionRequestAmount(String collector) {
+        return scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(requested_amount),0) FROM commission_withdrawal_requests WHERE UPPER(COALESCE(collector_name,''))=UPPER(?) AND status='Pending'", new String[]{collector});
+    }
+
+    private double rejectedCommissionRequestAmount(String collector) {
+        return scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(requested_amount),0) FROM commission_withdrawal_requests WHERE UPPER(COALESCE(collector_name,''))=UPPER(?) AND status='Rejected'", new String[]{collector});
+    }
+
     private int fullyPaidEligibleLoanCount(String collector) {
         return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Paid' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
     }
@@ -5207,6 +5445,39 @@ public class MainActivity extends Activity {
         String day = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
         int n = scalarInt(s, "SELECT COUNT(*) FROM commission_releases WHERE release_number LIKE ?", new String[]{"COM-" + day + "-%"}) + 1;
         return "COM-" + day + "-" + String.format(Locale.US, "%04d", n);
+    }
+
+    private String nextCommissionRequestNumber(SQLiteDatabase s) {
+        String day = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
+        int n = scalarInt(s, "SELECT COUNT(*) FROM commission_withdrawal_requests WHERE request_no LIKE ?", new String[]{"CWR-" + day + "-%"}) + 1;
+        return "CWR-" + day + "-" + String.format(Locale.US, "%04d", n);
+    }
+
+    private void insertCommissionReleaseAndLedger(SQLiteDatabase s, String releaseNo, String collector, double amount, String method, String remarks, String releaseDate, String ledgerRemarks) {
+        ContentValues rel = new ContentValues();
+        rel.put("release_number", releaseNo);
+        rel.put("release_date", releaseDate);
+        rel.put("collector", collector);
+        rel.put("amount", amount);
+        rel.put("method", method);
+        rel.put("remarks", remarks);
+        rel.put("released_by", currentUsername());
+        rel.put("status", "Released");
+        s.insertOrThrow("commission_releases", null, rel);
+        ContentValues led = new ContentValues();
+        led.put("collector", collector);
+        led.put("borrower", "");
+        led.put("loan_id", "");
+        led.put("receipt_number", releaseNo);
+        led.put("payment_id", "");
+        led.put("payment_amount", 0);
+        led.put("computed_commission", -amount);
+        led.put("earned_date", now());
+        led.put("status", "Released");
+        led.put("related_loan_id", "");
+        led.put("related_payment_id", "");
+        led.put("remarks", ledgerRemarks);
+        s.insertOrThrow("commission_ledger", null, led);
     }
 
     private LoanDetail findLoanDetail(String loanId) {
@@ -5236,6 +5507,102 @@ public class MainActivity extends Activity {
         v.put("actor", safe(user).isEmpty() ? "local_user" : user);
         v.put("created_at", now());
         s.insert("audit_logs", null, v);
+    }
+
+    private void createNotification(SQLiteDatabase s, String role, String username, String collector, String clientId, String title, String message, String type, String relatedTable, String relatedId) {
+        ContentValues v = new ContentValues();
+        v.put("recipient_role", safe(role));
+        v.put("recipient_username", safe(username));
+        v.put("recipient_collector_name", canonicalCollector(collector));
+        v.put("recipient_client_id", safe(clientId));
+        v.put("title", safe(title));
+        v.put("message", safe(message));
+        v.put("type", safe(type));
+        v.put("status", "Unread");
+        v.put("related_table", safe(relatedTable));
+        v.put("related_id", safe(relatedId));
+        v.put("created_at", now());
+        s.insert("notifications", null, v);
+    }
+
+    private int unreadNotificationCount() {
+        return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM notifications WHERE status='Unread' AND " + notificationWhere(), notificationArgs());
+    }
+
+    private String notificationWhere() {
+        if (isAdmin()) return "(recipient_role='Admin' OR recipient_username=?)";
+        if (isCollector()) return "(recipient_username=? OR recipient_role='Collector' OR UPPER(COALESCE(recipient_collector_name,''))=UPPER(?))";
+        if (isViewer()) return "(recipient_username=? OR recipient_role='Viewer' OR recipient_client_id=?)";
+        return "(recipient_username=? OR recipient_role=?)";
+    }
+
+    private String[] notificationArgs() {
+        if (isAdmin()) return new String[]{currentUsername()};
+        if (isCollector()) return new String[]{currentUsername(), canonicalCollector(currentUser.collectorName)};
+        if (isViewer()) return new String[]{currentUsername(), viewerClientId()};
+        return new String[]{currentUsername(), currentUser == null ? "" : currentUser.role};
+    }
+
+    private void showNotifications() {
+        if (currentUser == null) { showLoginScreen(); return; }
+        setActiveNav(NAV_MENU_KEY);
+        rememberScreen(new Runnable() { public void run() { showNotifications(); }});
+        clear("Notifications");
+        addBack("Back", new View.OnClickListener() { public void onClick(View v) { if (isViewer()) showClientPortalDashboard(); else showMainMenu(); }});
+        addAction("Mark All as Read", new View.OnClickListener() { public void onClick(View v) { markAllNotificationsRead(); }});
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT id,title,message,type,status,related_table,related_id,created_at FROM notifications WHERE " + notificationWhere() + " ORDER BY CASE status WHEN 'Unread' THEN 0 ELSE 1 END, created_at DESC LIMIT 100", notificationArgs());
+        try {
+            if (!c.moveToFirst()) { addEmpty("No notifications yet."); return; }
+            do {
+                final int id = c.getInt(0);
+                final String relatedTable = safe(c.getString(5));
+                final String relatedId = safe(c.getString(6));
+                String status = safe(c.getString(4));
+                String body = safe(c.getString(2)) + "\nType: " + safe(c.getString(3)) + "\nDate: " + safe(c.getString(7)) + "\nStatus: " + status;
+                addCard((status.equals("Unread") ? "New - " : "") + safe(c.getString(1)), body,
+                        new String[]{"Mark Read", relatedId.isEmpty() ? null : "Open"},
+                        new View.OnClickListener[]{
+                                new View.OnClickListener() { public void onClick(View v) { markNotificationRead(id); }},
+                                relatedId.isEmpty() ? null : new View.OnClickListener() { public void onClick(View v) { openNotificationRelated(id, relatedTable, relatedId); }}
+                        });
+            } while (c.moveToNext());
+        } finally {
+            c.close();
+        }
+    }
+
+    private void markNotificationRead(int id) {
+        ContentValues v = new ContentValues();
+        v.put("status", "Read");
+        v.put("read_at", now());
+        db.getWritableDatabase().update("notifications", v, "id=?", new String[]{String.valueOf(id)});
+        showNotifications();
+    }
+
+    private void markAllNotificationsRead() {
+        ContentValues v = new ContentValues();
+        v.put("status", "Read");
+        v.put("read_at", now());
+        db.getWritableDatabase().update("notifications", v, notificationWhere(), notificationArgs());
+        toast("Notifications marked read.");
+        showNotifications();
+    }
+
+    private void openNotificationRelated(int notificationId, String relatedTable, String relatedId) {
+        markNotificationReadNoRefresh(notificationId);
+        if ("commission_withdrawal_requests".equals(relatedTable)) showCommissionWithdrawalRequests();
+        else if ("commission_releases".equals(relatedTable)) showCommissionReleaseHistory(isCollector() ? currentUser.collectorName : null);
+        else if ("loans".equals(relatedTable) || "loan".equals(relatedTable)) showLoanDetails(relatedId);
+        else if ("repayments".equals(relatedTable) || "repayment".equals(relatedTable)) showPaymentReceiptScreen(relatedId);
+        else if ("clients".equals(relatedTable) || "client".equals(relatedTable)) showBorrowerProfile(relatedId);
+        else showNotifications();
+    }
+
+    private void markNotificationReadNoRefresh(int id) {
+        ContentValues v = new ContentValues();
+        v.put("status", "Read");
+        v.put("read_at", now());
+        db.getWritableDatabase().update("notifications", v, "id=?", new String[]{String.valueOf(id)});
     }
 
     private UserRow authenticate(String username, String password) {
@@ -5636,12 +6003,18 @@ public class MainActivity extends Activity {
             double released = -commissionStatusTotal(collector, "Released");
             double held = commissionStatusTotal(collector, "Held");
             double reversed = commissionStatusTotal(collector, "Reversed");
+            double pending = pendingCommissionRequestAmount(collector);
+            double rejected = rejectedCommissionRequestAmount(collector);
             double remaining = commissionAvailable(collector);
-            rows.append(tr(td(collector) + td(percent(setting.rate)) + td(String.valueOf(eligible)) + td(peso(expectedCommission)) + td(peso(availableEarned)) + td(peso(released)) + td(peso(held)) + td(peso(reversed)) + td(peso(remaining))));
+            double withdrawable = Math.max(0, remaining - pending);
+            rows.append(tr(td(collector) + td(percent(setting.rate)) + td(String.valueOf(eligible)) +
+                    td(peso(expectedCommission)) + td(peso(withdrawable)) + td(peso(pending)) +
+                    td(peso(released)) + td(peso(rejected)) + td(peso(availableEarned)) +
+                    td(peso(held)) + td(peso(reversed)) + td(peso(remaining))));
         }
-        if (rows.length() == 0) rows.append(tr("<td colspan='9'>No commission ledger entries found.</td>"));
+        if (rows.length() == 0) rows.append(tr("<td colspan='12'>No commission ledger entries found.</td>"));
         String body = reportHeader("Commission Summary Report", "Printed by: " + currentUsername()) +
-                table(new String[]{"Collector", "Rate", "Eligible Paid Loans", "Expected Commission", "Available Earned", "Released", "Held", "Reversed", "Remaining Balance"}, rows.toString());
+                table(new String[]{"Collector", "Rate", "Eligible Paid Loans", "Expected Commission", "Available for Withdrawal", "Pending Requests", "Released", "Rejected Requests", "Available Earned", "Held", "Reversed", "Remaining Balance"}, rows.toString());
         printHtml("CommissionSummary", htmlPage("Commission Summary Report", body), "Report print/PDF generated", "report", "Commission Summary", "Generated Commission Summary Report print/PDF");
     }
 
@@ -6914,6 +7287,7 @@ public class MainActivity extends Activity {
             db.execSQL("CREATE TABLE commission_settings(id INTEGER PRIMARY KEY AUTOINCREMENT,default_rate REAL,commission_type TEXT,effective_date TEXT,active INTEGER DEFAULT 1,created_at TEXT,updated_at TEXT)");
             db.execSQL("CREATE TABLE collector_commission_rates(id INTEGER PRIMARY KEY AUTOINCREMENT,collector_name TEXT,collector_user_id INTEGER DEFAULT 0,commission_rate REAL,commission_type TEXT,active INTEGER DEFAULT 1,effective_date TEXT,created_at TEXT,updated_at TEXT)");
             db.execSQL("CREATE TABLE commission_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,collector TEXT,borrower TEXT,loan_id TEXT,receipt_number TEXT,payment_id TEXT,payment_amount REAL,computed_commission REAL,earned_date TEXT,status TEXT,related_payment_id TEXT,related_loan_id TEXT,remarks TEXT)");
+            createCommissionWithdrawalTables(db);
             db.execSQL("CREATE TABLE audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,action TEXT,entity_type TEXT,entity_id TEXT,details TEXT,actor TEXT,created_at TEXT)");
             db.execSQL("CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT,full_name TEXT NOT NULL,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL,collector_name TEXT,linked_client_id TEXT,active INTEGER DEFAULT 1,created_at TEXT,updated_at TEXT)");
             createIndexes(db);
@@ -6981,6 +7355,10 @@ public class MainActivity extends Activity {
                 addColumn(db, "users", "linked_client_id TEXT");
                 createIndexes(db);
             }
+            if (oldVersion < 8) {
+                createCommissionWithdrawalTables(db);
+                createIndexes(db);
+            }
         }
 
         private static void addColumn(SQLiteDatabase db, String table, String definition) {
@@ -6991,6 +7369,7 @@ public class MainActivity extends Activity {
         }
 
         private static void createIndexes(SQLiteDatabase db) {
+            createCommissionWithdrawalTables(db);
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_clients_phone ON clients(phone)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_loans_client ON loans(client_id)");
@@ -7010,6 +7389,15 @@ public class MainActivity extends Activity {
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_commission_ledger_status ON commission_ledger(status)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_commission_releases_collector ON commission_releases(collector)");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_collector_rates_name ON collector_commission_rates(collector_name)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_commission_requests_collector ON commission_withdrawal_requests(collector_name)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_commission_requests_status ON commission_withdrawal_requests(status)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_role,recipient_username,recipient_collector_name,recipient_client_id,status)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_notifications_related ON notifications(related_table,related_id)");
+        }
+
+        private static void createCommissionWithdrawalTables(SQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS commission_withdrawal_requests(id INTEGER PRIMARY KEY AUTOINCREMENT,request_no TEXT UNIQUE,collector_name TEXT,requested_amount REAL,approved_amount REAL DEFAULT 0,status TEXT DEFAULT 'Pending',requested_by TEXT,approved_by TEXT,requested_at TEXT,approved_at TEXT,released_at TEXT,remarks TEXT,admin_remarks TEXT,created_at TEXT,updated_at TEXT)");
+            db.execSQL("CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,recipient_role TEXT,recipient_username TEXT,recipient_collector_name TEXT,recipient_client_id TEXT,title TEXT,message TEXT,type TEXT,status TEXT DEFAULT 'Unread',related_table TEXT,related_id TEXT,created_at TEXT,read_at TEXT)");
         }
 
         private static void seedDefaultAdmin(SQLiteDatabase db) {

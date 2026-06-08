@@ -16,6 +16,7 @@ This is a native Android conversion of the supplied Google Apps Script loan trac
 - Borrower passbook printing through Android's print dialog.
 - Local reports for collections, overdue accounts, loan releases, fully paid loans, cancelled/voided records, collector performance, and commission.
 - Collector commission release workflow. Commission is earned only when a loan becomes fully paid and is calculated as loan principal times the collector rate.
+- Collector commission withdrawal requests and local in-app notifications for request, release, loan, and payment events.
 - Admin tools for audit logs, system checks, user management, commission settings, and commission recalculation.
 
 ## Default Login
@@ -128,6 +129,11 @@ Attachment reminder:
 - JSON backups include attachment references.
 - If attachment image/file bundling is not implemented, copy `Android/data/com.alalay.loantracker/files/attachments/` separately before replacing, resetting, or migrating a phone.
 - Always create an encrypted backup before app updates, restore tests, or CSV imports.
+
+Notification reminder:
+
+- Notifications are local in-app notifications on the current phone only.
+- Real push notifications between devices require future Firebase/cloud sync.
 
 ## Final Test Checklist
 
