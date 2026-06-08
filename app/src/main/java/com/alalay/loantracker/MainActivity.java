@@ -688,7 +688,9 @@ public class MainActivity extends Activity {
             double released = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(amount),0) FROM commission_releases WHERE UPPER(COALESCE(collector,''))=UPPER(?) AND status='Released'", new String[]{collector});
             CommissionSetting setting = getCollectorCommissionSetting(collector);
             int eligible = fullyPaidEligibleLoanCount(collector);
-            double expectedCommission = expectedCommissionForCollector(collector);
+            double projectedCommission = projectedCommissionForCollector(collector);
+            double earnedCommission = expectedCommissionForCollector(collector);
+            double pending = pendingCommissionRequestAmount(collector);
             addCard("Collector Summary",
                     "Assigned Borrowers: " + borrowers +
                             "\nActive Loans Handled: " + loans +
@@ -696,11 +698,14 @@ public class MainActivity extends Activity {
                             "\nActual Collection: " + peso(actual) +
                             "\nCollector Rate: " + percent(setting.rate) +
                             "\nFully Paid Eligible Accounts: " + eligible +
-                            "\nExpected Commission: " + peso(expectedCommission) +
-                            "\nAvailable Commission: " + peso(available) +
+                            "\nExpected / Projected Commission: " + peso(projectedCommission) +
+                            "\nEarned Commission: " + peso(earnedCommission) +
+                            "\nAvailable for Withdrawal: " + peso(Math.max(0, available - pending)) +
+                            "\nPending Withdrawal: " + peso(pending) +
                             "\nReleased Commission: " + peso(released) +
                             "\nRemaining Balance: " + peso(available),
                     (String) null, (View.OnClickListener) null);
+            addProgressCard("Commission Progress", collectionProgressForCollector(collector), "Active loan collection progress toward projected commission.");
             addProfileMenuItem("☷", "My Assigned Borrowers", "Open assigned borrower list.", new View.OnClickListener() { public void onClick(View v) { showClients(); }});
             addProfileMenuItem("☑", "Collection Sheet", "Open due borrowers and print sheet.", canPrintCollectionSheet() ? new View.OnClickListener() { public void onClick(View v) { showWeeklyCollection(); }} : null);
             addProfileMenuItem("%", "My Commission", "View commission summary and request withdrawal.", canViewCommissionReports() ? new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }} : null);
@@ -806,9 +811,10 @@ public class MainActivity extends Activity {
                         new View.OnClickListener() { public void onClick(View v) { showChangePasswordDialog(false); }}
                 });
         addMenuGroup("Commission Tools", "Rates, requests, releases, history, and recalculation.",
-                new String[]{"[rate] Commission Settings", "[request] Withdrawal Requests", "[release] Commission Release", "[history] Release History", "[recalc] Recalculate Commission"},
+                new String[]{"[rate] Commission Settings", "[monitor] Collector Mapping Monitor", "[request] Withdrawal Requests", "[release] Commission Release", "[history] Release History", "[recalc] Recalculate Commission"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() { public void onClick(View v) { showCommissionSettings(); }},
+                        new View.OnClickListener() { public void onClick(View v) { showCollectorMappingMonitor("All"); }},
                         new View.OnClickListener() { public void onClick(View v) { showCommissionWithdrawalRequests(); }},
                         new View.OnClickListener() { public void onClick(View v) { showCommissionRelease(); }},
                         new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }},
@@ -3116,11 +3122,12 @@ public class MainActivity extends Activity {
                 new View.OnClickListener[]{new View.OnClickListener() { public void onClick(View v) { showReportFilter("Overdue", "today", true, false, false); }}});
         if (canViewCommissionReports()) {
             addMenuGroup("Commission Reports", "Commission earnings, releases, and remaining balances.",
-                    new String[]{"Commission Summary", "Commission Release", "Commission Balance"},
+                    new String[]{"Commission Summary", "Commission Release", "Commission Balance", "Collector Mapping Monitor"},
                     new View.OnClickListener[]{
                             new View.OnClickListener() { public void onClick(View v) { showCommissionSummaryReport(); }},
                             new View.OnClickListener() { public void onClick(View v) { showCommissionReleaseHistory(null); }},
-                            new View.OnClickListener() { public void onClick(View v) { showCommissionBalanceReport(); }}
+                            new View.OnClickListener() { public void onClick(View v) { showCommissionBalanceReport(); }},
+                            new View.OnClickListener() { public void onClick(View v) { showCollectorMappingMonitor(isCollector() ? currentUser.collectorName : "All"); }}
                     });
         }
         if (isAdmin()) {
@@ -3891,6 +3898,8 @@ public class MainActivity extends Activity {
         for (String collector : collectors) {
             CommissionSetting setting = getCollectorCommissionSetting(collector);
             int eligible = fullyPaidEligibleLoanCount(collector);
+            int activeLoans = activeCommissionLoanCount(collector);
+            double projectedCommission = projectedCommissionForCollector(collector);
             double expectedCommission = expectedCommissionForCollector(collector);
             double availableEarned = commissionStatusTotal(collector, "Available");
             double released = -commissionStatusTotal(collector, "Released");
@@ -3903,7 +3912,9 @@ public class MainActivity extends Activity {
             addCard((titlePrefix == null ? "" : titlePrefix + " - ") + collector,
                     "Collector Rate: " + percent(setting.rate) +
                             "\nFully Paid Eligible Accounts: " + eligible +
-                            "\nExpected Commission: " + peso(expectedCommission) +
+                            "\nActive Not-Yet-Paid Accounts: " + activeLoans +
+                            "\nExpected / Projected Commission: " + peso(projectedCommission) +
+                            "\nEarned Commission: " + peso(expectedCommission) +
                             "\nAvailable for Withdrawal: " + peso(Math.max(0, remaining - pending)) +
                             "\nPending Withdrawal Requests: " + peso(pending) +
                             "\nReleased Commission: " + peso(released) +
@@ -3913,6 +3924,10 @@ public class MainActivity extends Activity {
                             "\nRemaining Balance: " + peso(remaining),
                     isCollector() ? "Request Withdrawal" : null,
                     isCollector() ? new View.OnClickListener() { public void onClick(View v) { showCommissionWithdrawalRequestDialog(); }} : null);
+            addProgressCard("Commission Progress - " + collector,
+                    collectionProgressForCollector(collector),
+                    "Collected on active loans toward earning projected commission.");
+            addCollectorCommissionLoanProgress(collector, 6);
         }
         addCopySummary(summary.toString());
     }
@@ -4130,6 +4145,419 @@ public class MainActivity extends Activity {
         } finally {
             s.endTransaction();
         }
+    }
+
+    private void showCollectorMappingMonitor(String collectorFilter) {
+        if (!(isAdmin() || isCollector() || isCashier())) { notAllowed(); return; }
+        if (isCollector()) collectorFilter = currentUser.collectorName;
+        setActiveNav(NAV_REPORTS_KEY);
+        final String selected = isAll(collectorFilter) ? "All" : canonicalCollectorOrRaw(collectorFilter);
+        rememberScreen(new Runnable() { public void run() { showCollectorMappingMonitor(selected); }});
+        clear("Collector Mapping Monitor");
+        addBack(isAdmin() ? "Back to Admin Checks" : "Back to Reports", new View.OnClickListener() { public void onClick(View v) { if (isAdmin()) showAdminChecks(); else showReportsMenu(); }});
+        if (!isCollector()) addAction("Filter Collector", new View.OnClickListener() { public void onClick(View v) { showCollectorMonitorFilterDialog(selected); }});
+        addAction("Print Collector Mapping Report", new View.OnClickListener() { public void onClick(View v) { printCollectorMappingReport(selected); }});
+        addAction("Export Collector Mapping CSV", new View.OnClickListener() { public void onClick(View v) { exportCollectorMappingCsv(selected); }});
+        addSection("Collector Summary");
+        if (isAll(selected)) {
+            for (String collector : collectorMonitorCollectors(true)) addCollectorMappingSummaryCard(collector);
+        } else {
+            addCollectorMappingSummaryCard(selected);
+        }
+        addSection("Commission Progress");
+        if (isAll(selected)) {
+            for (String collector : collectorMonitorCollectors(false)) {
+                addProgressCard(collector, collectionProgressForCollector(collector), "Active loan collection progress toward projected commission.");
+            }
+        } else {
+            addProgressCard(selected, collectionProgressForCollector(selected), "Active loan collection progress toward projected commission.");
+            addCollectorCommissionLoanProgress(selected, 10);
+        }
+        addSection("Mapping Issues");
+        addCollectorMappingIssues(selected, true);
+        addSection("Assigned Clients");
+        addCollectorAssignedClients(selected);
+        addSection("Assigned Loans");
+        addCollectorAssignedLoans(selected);
+        addSection("Payment / Collection Mapping");
+        addCollectorPaymentMapping(selected);
+        addSection("Schedule Mapping");
+        addCollectorScheduleMapping(selected);
+    }
+
+    private void showCollectorMonitorFilterDialog(String current) {
+        final ArrayList<String> collectors = collectorMonitorCollectors(true);
+        new AlertDialog.Builder(this)
+                .setTitle("Collector Filter")
+                .setItems(collectors.toArray(new String[0]), (d, which) -> showCollectorMappingMonitor(collectors.get(which)))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private ArrayList<String> collectorMonitorCollectors(boolean includeAll) {
+        ArrayList<String> out = new ArrayList<>();
+        if (includeAll && !isCollector()) out.add("All");
+        for (String c : COLLECTOR_NAMES) if (!out.contains(c)) out.add(c);
+        Cursor c = db.getReadableDatabase().rawQuery(
+                "SELECT collector FROM clients WHERE COALESCE(collector,'')!='' " +
+                        "UNION SELECT collector FROM loans WHERE COALESCE(collector,'')!='' " +
+                        "UNION SELECT collector FROM commission_ledger WHERE COALESCE(collector,'')!='' " +
+                        "UNION SELECT collector_name FROM commission_withdrawal_requests WHERE COALESCE(collector_name,'')!='' " +
+                        "ORDER BY 1", null);
+        try {
+            while (c.moveToNext()) {
+                String name = canonicalCollectorOrRaw(c.getString(0));
+                if (!out.contains(name)) out.add(name);
+            }
+        } finally { c.close(); }
+        if (isCollector()) {
+            out.clear();
+            out.add(canonicalCollector(currentUser.collectorName));
+        }
+        return out;
+    }
+
+    private void addCollectorMappingSummaryCard(final String collector) {
+        CommissionSetting setting = getCollectorCommissionSetting(collector);
+        String[] arg = new String[]{collector};
+        int totalClients = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM clients WHERE UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int activeClients = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM clients WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int totalLoans = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int activeLoans = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int paidLoans = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Paid' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int cancelledLoans = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Cancelled' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        double principal = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(principal),0) FROM loans WHERE status!='Cancelled' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        double totalPayable = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(total_due),0) FROM loans WHERE status!='Cancelled' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        double outstanding = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(balance),0) FROM loans WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        double collected = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND UPPER(COALESCE(l.collector,''))=UPPER(?)", arg);
+        String today = ISO.format(new Date());
+        Calendar soon = Calendar.getInstance();
+        soon.add(Calendar.DAY_OF_MONTH, 7);
+        int dueToday = scalarInt(db.getReadableDatabase(), "SELECT COUNT(DISTINCT l.loan_id) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.status!='Paid' AND s.due_date=? AND UPPER(COALESCE(l.collector,''))=UPPER(?)", new String[]{today, collector});
+        int dueSoon = scalarInt(db.getReadableDatabase(), "SELECT COUNT(DISTINCT l.loan_id) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.status!='Paid' AND s.due_date>? AND s.due_date<=? AND UPPER(COALESCE(l.collector,''))=UPPER(?)", new String[]{today, ISO.format(soon.getTime()), collector});
+        int overdue = scalarInt(db.getReadableDatabase(), "SELECT COUNT(DISTINCT l.loan_id) FROM schedule s JOIN loans l ON l.loan_id=s.loan_id WHERE s.status!='Paid' AND s.due_date<? AND UPPER(COALESCE(l.collector,''))=UPPER(?)", new String[]{today, collector});
+        double projected = projectedCommissionForCollector(collector);
+        double earned = expectedCommissionForCollector(collector);
+        double pending = pendingCommissionRequestAmount(collector);
+        double released = -commissionStatusTotal(collector, "Released");
+        double remaining = commissionAvailable(collector);
+        addCard(collector,
+                "Rate: " + percent(setting.rate) +
+                        "\nClients: " + totalClients + " total / " + activeClients + " active" +
+                        "\nLoans: " + totalLoans + " total / " + activeLoans + " active / " + paidLoans + " paid / " + cancelledLoans + " cancelled" +
+                        "\nPrincipal Released: " + peso(principal) +
+                        "\nTotal Payable: " + peso(totalPayable) +
+                        "\nOutstanding: " + peso(outstanding) +
+                        "\nTotal Collected: " + peso(collected) +
+                        "\nDue Today: " + dueToday + " | Due Soon: " + dueSoon + " | Overdue: " + overdue +
+                        "\nExpected / Projected Commission: " + peso(projected) +
+                        "\nEarned Commission: " + peso(earned) +
+                        "\nAvailable for Withdrawal: " + peso(Math.max(0, remaining - pending)) +
+                        "\nPending Withdrawal: " + peso(pending) +
+                        "\nReleased Commission: " + peso(released) +
+                        "\nRemaining Commission Balance: " + peso(remaining),
+                (String) null, null);
+    }
+
+    private void addCollectorAssignedClients(String collector) {
+        String where = isAll(collector) ? "1=1" : "UPPER(COALESCE(collector,''))=UPPER(?)";
+        String[] args = isAll(collector) ? null : new String[]{collector};
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT client_id,name,phone,address,status,active_loans,total_outstanding,collector FROM clients WHERE " + where + " ORDER BY collector,name LIMIT 80", args);
+        int count = 0;
+        try {
+            while (c.moveToNext()) {
+                count++;
+                final String clientId = c.getString(0);
+                final String oldCollector = safe(c.getString(7));
+                String body = "ID: " + clientId + "\nPhone: " + fallback(c.getString(2), "Blank") + "\nAddress: " + fallback(c.getString(3), "Blank") +
+                        "\nCollector: " + fallback(oldCollector, "Unassigned") + "\nActive Loans: " + c.getInt(5) +
+                        "\nOutstanding: " + peso(c.getDouble(6)) + "\nStatus: " + statusBadge(c.getString(4));
+                addCard(c.getString(1), body,
+                        new String[]{"Open Profile", "Loan History", isAdmin() ? "Reassign Client" : null},
+                        new View.OnClickListener[]{
+                                new View.OnClickListener() { public void onClick(View v) { showBorrowerProfile(clientId); }},
+                                new View.OnClickListener() { public void onClick(View v) { showBorrowerLoanHistory(clientId, "All"); }},
+                                isAdmin() ? new View.OnClickListener() { public void onClick(View v) { showReassignCollectorDialog("client", clientId, oldCollector); }} : null
+                        });
+            }
+        } finally { c.close(); }
+        if (count == 0) addEmpty("No assigned clients found.");
+    }
+
+    private void addCollectorAssignedLoans(String collector) {
+        String where = isAll(collector) ? "1=1" : "UPPER(COALESCE(collector,''))=UPPER(?)";
+        String[] args = isAll(collector) ? null : new String[]{collector};
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT loan_id,client_name,principal,total_due,balance,status,release_date,maturity_date,next_due_date,terms,collector FROM loans WHERE " + where + " ORDER BY collector,release_date DESC LIMIT 80", args);
+        int count = 0;
+        try {
+            while (c.moveToNext()) {
+                count++;
+                final String loanId = c.getString(0);
+                final String oldCollector = safe(c.getString(10));
+                double progress = loanPaymentProgress(loanId);
+                String body = "Borrower: " + safe(c.getString(1)) +
+                        "\nPrincipal: " + peso(c.getDouble(2)) + " | Total: " + peso(c.getDouble(3)) +
+                        "\nBalance: " + peso(c.getDouble(4)) + " | " + statusBadge(c.getString(5)) +
+                        "\nRelease: " + fallback(c.getString(6), "Blank") + " | Maturity: " + fallback(c.getString(7), "Blank") +
+                        "\nNext Due: " + fallback(c.getString(8), "None") + " | Frequency: " + fallback(c.getString(9), "Not set") +
+                        "\nCollector: " + fallback(oldCollector, "Unassigned") +
+                        "\nLoan Payment Progress: " + percentWhole(progress);
+                addCard(loanId, body,
+                        new String[]{"Open Loan", "Schedule", isAdmin() ? "Reassign Loan" : null},
+                        new View.OnClickListener[]{
+                                new View.OnClickListener() { public void onClick(View v) { showLoanDetails(loanId); }},
+                                new View.OnClickListener() { public void onClick(View v) { showRepaymentSchedule(loanId); }},
+                                isAdmin() ? new View.OnClickListener() { public void onClick(View v) { showReassignCollectorDialog("loan", loanId, oldCollector); }} : null
+                        });
+            }
+        } finally { c.close(); }
+        if (count == 0) addEmpty("No assigned loans found.");
+    }
+
+    private void addCollectorPaymentMapping(String collector) {
+        String where = isAll(collector) ? "1=1" : "UPPER(COALESCE(l.collector,''))=UPPER(?)";
+        String[] args = isAll(collector) ? null : new String[]{collector};
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT r.payment_id,r.receipt_number,r.loan_id,r.client_name,r.amount,r.payment_date,r.method,r.posted_by,l.collector,c.collector,r.voided FROM repayments r LEFT JOIN loans l ON l.loan_id=r.loan_id LEFT JOIN clients c ON c.client_id=r.client_id WHERE " + where + " ORDER BY r.payment_date DESC,r.encoded_at DESC LIMIT 80", args);
+        int count = 0;
+        try {
+            while (c.moveToNext()) {
+                count++;
+                String issue = "";
+                if (safe(c.getString(8)).isEmpty()) issue += "Loan has missing collector. ";
+                if (!safe(c.getString(9)).isEmpty() && !safe(c.getString(8)).isEmpty() && !safe(c.getString(9)).equalsIgnoreCase(safe(c.getString(8)))) issue += "Client collector differs from loan collector. ";
+                if (postedByCollectorMismatch(c.getString(7), c.getString(8))) issue += "Posted-by collector user differs from loan collector. ";
+                addCard(safe(c.getString(1)).isEmpty() ? c.getString(0) : c.getString(1),
+                        "Payment ID: " + safe(c.getString(0)) + "\nLoan: " + safe(c.getString(2)) + "\nBorrower: " + safe(c.getString(3)) +
+                                "\nAmount: " + peso(c.getDouble(4)) + "\nDate: " + fallback(c.getString(5), "Blank") +
+                                "\nMethod: " + fallback(c.getString(6), "Blank") + "\nPosted By: " + fallback(c.getString(7), "Blank") +
+                                "\nLoan Collector: " + fallback(c.getString(8), "Unassigned") + "\nVoid Status: " + (c.getInt(10) == 1 ? "Voided" : "Valid") +
+                                (issue.isEmpty() ? "\nMapping: OK" : "\nIssue: " + issue.trim()),
+                        (String) null, null);
+            }
+        } finally { c.close(); }
+        if (count == 0) addEmpty("No payments found for this collector filter.");
+    }
+
+    private void addCollectorScheduleMapping(String collector) {
+        String where = isAll(collector) ? "1=1" : "UPPER(COALESCE(l.collector,''))=UPPER(?)";
+        String[] args = isAll(collector) ? null : new String[]{collector};
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT s.loan_id,l.client_name,s.installment_no,s.due_date,s.scheduled_amount,s.paid_to_date,l.balance,s.status,l.collector FROM schedule s LEFT JOIN loans l ON l.loan_id=s.loan_id WHERE " + where + " ORDER BY l.collector,s.due_date,l.client_name LIMIT 80", args);
+        int count = 0;
+        try {
+            while (c.moveToNext()) {
+                count++;
+                String issue = safe(c.getString(8)).isEmpty() ? "Schedule due but loan collector is missing." : "Mapping: OK";
+                if (safe(c.getString(1)).isEmpty()) issue = "Schedule row has loan missing.";
+                addCard("Due " + fallback(c.getString(3), "Blank") + " - " + safe(c.getString(0)),
+                        "Borrower: " + fallback(c.getString(1), "Missing loan") +
+                                "\nInstallment: " + c.getInt(2) + "\nScheduled: " + peso(c.getDouble(4)) +
+                                "\nPaid: " + peso(c.getDouble(5)) + "\nBalance: " + peso(c.getDouble(6)) +
+                                "\nStatus: " + fallback(c.getString(7), "Blank") + "\nCollector: " + fallback(c.getString(8), "Unassigned") +
+                                "\n" + issue,
+                        (String) null, null);
+            }
+        } finally { c.close(); }
+        if (count == 0) addEmpty("No schedule rows found for this collector filter.");
+    }
+
+    private void addCollectorMappingIssues(String collector, boolean showCards) {
+        ArrayList<String> issues = collectorMappingIssues(collector);
+        if (issues.isEmpty()) {
+            addEmpty("No collector mapping issues found for this filter.");
+            return;
+        }
+        int limit = Math.min(issues.size(), 60);
+        for (int i = 0; i < limit; i++) addCard("Mapping Issue", issues.get(i), (String) null, null);
+        if (issues.size() > limit) addCard("More Issues", (issues.size() - limit) + " additional issue(s) omitted from this screen. Use Print or CSV export for review.", (String) null, null);
+    }
+
+    private ArrayList<String> collectorMappingIssues(String collector) {
+        ArrayList<String> out = new ArrayList<>();
+        addIssueRows(out, "Client without collector", "SELECT client_id,name,collector,'' FROM clients WHERE COALESCE(collector,'')='' ORDER BY name", null, "Set client collector.");
+        addIssueRows(out, "Loan without collector", "SELECT loan_id,client_name,collector,'' FROM loans WHERE COALESCE(collector,'')='' ORDER BY loan_id", null, "Set loan collector.");
+        addIssueRows(out, "Client/loan collector mismatch", "SELECT l.loan_id,l.client_name,l.collector,c.collector FROM loans l JOIN clients c ON c.client_id=l.client_id WHERE COALESCE(l.collector,'')!='' AND COALESCE(c.collector,'')!='' AND UPPER(l.collector)!=UPPER(c.collector)" + collectorIssueClause(collector, "l"), collectorIssueArgs(collector), "Reassign client or loan to the correct collector.");
+        addIssueRows(out, "Commission/loan collector mismatch", "SELECT cl.loan_id,cl.borrower,cl.collector,l.collector FROM commission_ledger cl JOIN loans l ON l.loan_id=COALESCE(NULLIF(cl.related_loan_id,''),cl.loan_id) WHERE COALESCE(cl.collector,'')!='' AND COALESCE(l.collector,'')!='' AND UPPER(cl.collector)!=UPPER(l.collector)" + collectorIssueClause(collector, "l"), collectorIssueArgs(collector), "Review commission ledger and recalculate commission if needed.");
+        addIssueRows(out, "Unknown collector name", "SELECT 'client',client_id,collector,'' FROM clients WHERE COALESCE(collector,'')!='' AND " + unknownCollectorSql("collector") + " UNION ALL SELECT 'loan',loan_id,collector,'' FROM loans WHERE COALESCE(collector,'')!='' AND " + unknownCollectorSql("collector") + " UNION ALL SELECT 'commission',loan_id,collector,'' FROM commission_ledger WHERE COALESCE(collector,'')!='' AND " + unknownCollectorSql("collector"), null, "Use Collector Cleanup or reassign to a canonical collector.");
+        addIssueRows(out, "Collector user not linked", "SELECT collector_name,username,collector_name,'' FROM users WHERE role='Collector' AND COALESCE(collector_name,'')=''", null, "Edit user and pick a collector name.");
+        addIssueRows(out, "Canonical collector without user", "SELECT collector_name,collector_name,collector_name,'' FROM collector_commission_rates r WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.role='Collector' AND UPPER(COALESCE(u.collector_name,''))=UPPER(r.collector_name))", null, "Create or edit Collector user account.");
+        addIssueRows(out, "Viewer without linked client", "SELECT username,full_name,linked_client_id,'' FROM users WHERE role='Viewer' AND COALESCE(linked_client_id,'')=''", null, "Link Viewer account to a client.");
+        return out;
+    }
+
+    private void addIssueRows(ArrayList<String> out, String type, String sql, String[] args, String suggestion) {
+        Cursor c = db.getReadableDatabase().rawQuery(sql, args);
+        try {
+            while (c.moveToNext()) {
+                out.add("Issue Type: " + type + "\nRecord ID: " + safe(c.getString(0)) + "\nBorrower/Record: " + safe(c.getString(1)) +
+                        "\nCurrent Collector: " + fallback(c.getString(2), "Unassigned") + "\nExpected Collector: " + fallback(c.getString(3), "Unknown") +
+                        "\nSuggested Fix: " + suggestion);
+            }
+        } finally { c.close(); }
+    }
+
+    private String collectorIssueClause(String collector, String alias) {
+        if (isAll(collector)) return "";
+        return " AND UPPER(COALESCE(" + alias + ".collector,''))=UPPER(?)";
+    }
+
+    private String[] collectorIssueArgs(String collector) {
+        return isAll(collector) ? null : new String[]{collector};
+    }
+
+    private String unknownCollectorSql(String col) {
+        return "UPPER(" + col + ") NOT IN ('LEO PELIN','SHEGFRED CABANA','RASHIEM MORATA','EHVAN PABUAYA')";
+    }
+
+    private void showReassignCollectorDialog(final String type, final String id, String oldCollector) {
+        if (!requireAdmin()) return;
+        final ArrayList<String> collectors = collectorMonitorCollectors(false);
+        final String[] labels = collectors.toArray(new String[0]);
+        new AlertDialog.Builder(this)
+                .setTitle("Reassign Collector")
+                .setMessage("Move this " + type + " from " + fallback(oldCollector, "Unassigned") + " to which collector?")
+                .setItems(labels, (d, which) -> showReassignCollectorConfirm(type, id, oldCollector, labels[which]))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showReassignCollectorConfirm(final String type, final String id, final String oldCollector, final String newCollector) {
+        final String[] options = "client".equals(type)
+                ? new String[]{"Reassign client only", "Reassign client + active loans"}
+                : new String[]{"Reassign loan only", "Reassign loan + open schedule rows"};
+        new AlertDialog.Builder(this)
+                .setTitle("Confirm Collector Reassignment")
+                .setMessage("Move this " + type + " from " + fallback(oldCollector, "Unassigned") + " to " + newCollector + "?")
+                .setItems(options, (d, which) -> applyCollectorReassign(type, id, oldCollector, newCollector, options[which]))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void applyCollectorReassign(String type, String id, String oldCollector, String newCollector, String mode) {
+        SQLiteDatabase s = db.getWritableDatabase();
+        s.beginTransaction();
+        try {
+            ContentValues v = new ContentValues();
+            v.put("collector", newCollector);
+            v.put("collector_user_id", findCollectorUserId(newCollector));
+            v.put("updated_at", now());
+            v.put("updated_by", currentUsername());
+            int changed = 0;
+            if ("client".equals(type)) {
+                changed += s.update("clients", v, "client_id=?", new String[]{id});
+                if (mode.contains("active loans")) changed += s.update("loans", v, "client_id=? AND status='Active'", new String[]{id});
+            } else {
+                changed += s.update("loans", v, "loan_id=?", new String[]{id});
+            }
+            createNotification(s, "Admin", "", "", "", "Collector mapping updated", type + " " + id + " moved to " + newCollector + ".", "Collector mapping", type, id);
+            audit(s, "Collector mapping reassigned", type, id, "From " + safe(oldCollector) + " to " + newCollector + " | " + mode + " | rows=" + changed, currentUsername());
+            s.setTransactionSuccessful();
+            toast("Collector mapping updated.");
+            showCollectorMappingMonitor(newCollector);
+        } catch (Exception ex) {
+            toast("Reassign failed: " + ex.getMessage());
+        } finally { s.endTransaction(); }
+    }
+
+    private void printCollectorMappingReport(String collector) {
+        if (!(isAdmin() || isCollector() || isCashier())) { notAllowed(); return; }
+        if (isCollector()) collector = currentUser.collectorName;
+        StringBuilder body = new StringBuilder();
+        body.append(reportHeader("Collector Mapping Report", "Collector: " + (isAll(collector) ? "All" : collector) + " | Generated: " + now()));
+        body.append("<h2>Summary</h2>");
+        StringBuilder rows = new StringBuilder();
+        ArrayList<String> collectors = isAll(collector) ? collectorMonitorCollectors(false) : new ArrayList<String>();
+        if (!isAll(collector)) collectors.add(collector);
+        for (String col : collectors) rows.append(collectorSummaryHtmlRow(col));
+        body.append(table(new String[]{"Collector", "Rate", "Clients", "Loans", "Active", "Paid", "Principal", "Outstanding", "Collected", "Projected Commission", "Earned Commission", "Payment Progress"}, rows.toString()));
+        body.append("<h2>Mapping Issues</h2>");
+        StringBuilder issueRows = new StringBuilder();
+        for (String issue : collectorMappingIssues(collector)) issueRows.append(tr(td(issue.replace("\n", "<br>"))));
+        if (issueRows.length() == 0) issueRows.append(tr("<td>No mapping issues found.</td>"));
+        body.append(table(new String[]{"Issue"}, issueRows.toString()));
+        body.append("<h2>Assigned Loans</h2>");
+        body.append(table(new String[]{"Loan", "Borrower", "Principal", "Total", "Paid", "Progress", "Projected", "Earned Status", "Collector"},
+                collectorLoanProgressHtmlRows(collector, 200)));
+        printHtml("CollectorMapping-" + safe(collector).replace(" ", "_"), htmlPage("Collector Mapping Report", body.toString()), "Report print/PDF generated", "report", "Collector Mapping", "Generated Collector Mapping Report for " + collector);
+    }
+
+    private void exportCollectorMappingCsv(String collector) {
+        try {
+            if (isCollector()) collector = currentUser.collectorName;
+            File file = writeTextCsv("Collector_Mapping", collectorMappingCsv(collector));
+            audit(db.getWritableDatabase(), "CSV export created", "csv_export", file.getName(), "Exported Collector Mapping Monitor", currentUsername());
+            shareFile(file, "text/csv", "A&L Collector Mapping CSV");
+        } catch (Exception ex) {
+            toast("Collector mapping CSV failed: " + ex.getMessage());
+        }
+    }
+
+    private File writeTextCsv(String prefix, String data) throws Exception {
+        File file = new File(backupDir(), "A&L_" + prefix + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".csv");
+        writeText(file, data);
+        return file;
+    }
+
+    private String collectorMappingCsv(String collector) {
+        StringBuilder out = new StringBuilder();
+        out.append("section,record_id,borrower,collector,amount,status,details\n");
+        ArrayList<String> collectors = isAll(collector) ? collectorMonitorCollectors(false) : new ArrayList<String>();
+        if (!isAll(collector)) collectors.add(collector);
+        for (String col : collectors) {
+            out.append(csv("summary")).append(",").append(csv(col)).append(",").append(csv(""))
+                    .append(",").append(csv(col)).append(",").append(csv(String.valueOf(projectedCommissionForCollector(col))))
+                    .append(",").append(csv("Projected Commission")).append(",").append(csv("Earned=" + expectedCommissionForCollector(col) + "; Progress=" + percentWhole(collectionProgressForCollector(col)))).append("\n");
+        }
+        for (String issue : collectorMappingIssues(collector)) {
+            out.append(csv("issue")).append(",").append(csv("")).append(",").append(csv(""))
+                    .append(",").append(csv("")).append(",").append(csv("")).append(",").append(csv("Issue")).append(",").append(csv(issue)).append("\n");
+        }
+        return out.toString();
+    }
+
+    private String collectorSummaryHtmlRow(String collector) {
+        String[] arg = new String[]{collector};
+        CommissionSetting setting = getCollectorCommissionSetting(collector);
+        int clients = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM clients WHERE UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int loans = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int active = scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        int paid = fullyPaidEligibleLoanCount(collector);
+        double principal = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(principal),0) FROM loans WHERE status!='Cancelled' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        double outstanding = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(balance),0) FROM loans WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", arg);
+        double collected = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND UPPER(COALESCE(l.collector,''))=UPPER(?)", arg);
+        return tr(td(collector) + td(percent(setting.rate)) + td(String.valueOf(clients)) + td(String.valueOf(loans)) + td(String.valueOf(active)) + td(String.valueOf(paid)) + td(peso(principal)) + td(peso(outstanding)) + td(peso(collected)) + td(peso(projectedCommissionForCollector(collector))) + td(peso(expectedCommissionForCollector(collector))) + td(percentWhole(collectionProgressForCollector(collector))));
+    }
+
+    private String collectorLoanProgressHtmlRows(String collector, int limit) {
+        String where = isAll(collector) ? "l.status!='Cancelled'" : "l.status!='Cancelled' AND UPPER(COALESCE(l.collector,''))=UPPER(?)";
+        String[] args = isAll(collector) ? null : new String[]{collector};
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT l.loan_id,l.client_name,l.principal,l.total_due,l.status,l.collector,COALESCE(SUM(CASE WHEN r.voided=0 THEN r.amount ELSE 0 END),0) FROM loans l LEFT JOIN repayments r ON r.loan_id=l.loan_id WHERE " + where + " GROUP BY l.loan_id ORDER BY l.collector,l.release_date DESC LIMIT " + limit, args);
+        StringBuilder rows = new StringBuilder();
+        try {
+            while (c.moveToNext()) {
+                double paid = c.getDouble(6);
+                double total = c.getDouble(3);
+                double progress = total > 0 ? Math.min(100, paid / total * 100.0) : 0;
+                double projected = round2(c.getDouble(2) * getCollectorCommissionSetting(c.getString(5)).rate);
+                String earnedStatus = "Paid".equalsIgnoreCase(c.getString(4)) ? "Earned" : "Not Yet Earned";
+                rows.append(tr(td(c.getString(0)) + td(c.getString(1)) + td(peso(c.getDouble(2))) + td(peso(total)) + td(peso(paid)) + td(percentWhole(progress)) + td(peso(projected)) + td(earnedStatus) + td(c.getString(5))));
+            }
+        } finally { c.close(); }
+        if (rows.length() == 0) rows.append(tr("<td colspan='9'>No loans found.</td>"));
+        return rows.toString();
+    }
+
+    private void addCollectorCommissionLoanProgress(String collector, int limit) {
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT l.loan_id,l.client_name,l.principal,l.total_due,l.status,l.collector,COALESCE(SUM(CASE WHEN r.voided=0 THEN r.amount ELSE 0 END),0) FROM loans l LEFT JOIN repayments r ON r.loan_id=l.loan_id WHERE l.status!='Cancelled' AND UPPER(COALESCE(l.collector,''))=UPPER(?) GROUP BY l.loan_id ORDER BY CASE l.status WHEN 'Active' THEN 0 ELSE 1 END,l.release_date DESC LIMIT " + limit, new String[]{collector});
+        try {
+            while (c.moveToNext()) {
+                double paid = c.getDouble(6);
+                double total = c.getDouble(3);
+                double progress = total > 0 ? Math.min(100, paid / total * 100.0) : 0;
+                double projected = round2(c.getDouble(2) * getCollectorCommissionSetting(c.getString(5)).rate);
+                addProgressCard(c.getString(0) + " - " + c.getString(1), progress,
+                        "Paid " + peso(paid) + " of " + peso(total) + ". Projected commission: " + peso(projected) + ". Status: " + ("Paid".equalsIgnoreCase(c.getString(4)) ? "Earned" : "Not Yet Earned") + ".");
+            }
+        } finally { c.close(); }
     }
 
     private void addScheduleList(String sql, String[] args) {
@@ -5399,6 +5827,10 @@ public class MainActivity extends Activity {
         return safe(collector).trim();
     }
 
+    private String canonicalCollectorOrRaw(String collector) {
+        return canonicalCollector(collector);
+    }
+
     private int findCollectorUserId(String collector) {
         String canonical = canonicalCollector(collector);
         Cursor c = db.getReadableDatabase().rawQuery("SELECT id FROM users WHERE role='Collector' AND UPPER(COALESCE(collector_name,''))=UPPER(?) LIMIT 1", new String[]{canonical});
@@ -5435,10 +5867,44 @@ public class MainActivity extends Activity {
         return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Paid' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
     }
 
+    private int activeCommissionLoanCount(String collector) {
+        return scalarInt(db.getReadableDatabase(), "SELECT COUNT(*) FROM loans WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
+    }
+
     private double expectedCommissionForCollector(String collector) {
         CommissionSetting setting = getCollectorCommissionSetting(collector);
         double principal = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(principal),0) FROM loans WHERE status='Paid' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
         return round2(principal * setting.rate);
+    }
+
+    private double projectedCommissionForCollector(String collector) {
+        CommissionSetting setting = getCollectorCommissionSetting(collector);
+        double principal = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(principal),0) FROM loans WHERE status!='Cancelled' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
+        return round2(principal * setting.rate);
+    }
+
+    private double collectionProgressForCollector(String collector) {
+        double total = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(total_due),0) FROM loans WHERE status='Active' AND UPPER(COALESCE(collector,''))=UPPER(?)", new String[]{collector});
+        if (total <= 0.009) return 0;
+        double paid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(r.amount),0) FROM repayments r JOIN loans l ON l.loan_id=r.loan_id WHERE r.voided=0 AND l.status='Active' AND UPPER(COALESCE(l.collector,''))=UPPER(?)", new String[]{collector});
+        return Math.max(0, Math.min(100, paid / total * 100.0));
+    }
+
+    private double loanPaymentProgress(String loanId) {
+        LoanDetail d = findLoanDetail(loanId);
+        if (d == null || d.totalDue <= 0.009) return 0;
+        double paid = scalarDouble(db.getReadableDatabase(), "SELECT COALESCE(SUM(amount),0) FROM repayments WHERE voided=0 AND loan_id=?", new String[]{loanId});
+        return Math.max(0, Math.min(100, paid / d.totalDue * 100.0));
+    }
+
+    private boolean postedByCollectorMismatch(String postedBy, String collector) {
+        if (safe(postedBy).isEmpty() || safe(collector).isEmpty()) return false;
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT role,collector_name FROM users WHERE username=? LIMIT 1", new String[]{postedBy});
+        try {
+            if (!c.moveToFirst()) return false;
+            if (!"Collector".equalsIgnoreCase(c.getString(0))) return false;
+            return !canonicalCollector(c.getString(1)).equalsIgnoreCase(canonicalCollector(collector));
+        } finally { c.close(); }
     }
 
     private String nextCommissionReleaseNumber(SQLiteDatabase s) {
@@ -5990,15 +6456,14 @@ public class MainActivity extends Activity {
         if (!canViewCommissionReports()) { notAllowed(); return; }
         ArrayList<String> collectors = new ArrayList<>();
         if (isCollector()) collectors.add(currentUser.collectorName);
-        else {
-            Cursor c = db.getReadableDatabase().rawQuery("SELECT DISTINCT collector FROM commission_ledger WHERE COALESCE(collector,'')!='' ORDER BY collector", null);
-            try { while (c.moveToNext()) collectors.add(c.getString(0)); } finally { c.close(); }
-        }
+        else collectors.addAll(collectorMonitorCollectors(false));
         StringBuilder rows = new StringBuilder();
         for (String collector : collectors) {
             CommissionSetting setting = getCollectorCommissionSetting(collector);
             int eligible = fullyPaidEligibleLoanCount(collector);
-            double expectedCommission = expectedCommissionForCollector(collector);
+            int activeLoans = activeCommissionLoanCount(collector);
+            double projectedCommission = projectedCommissionForCollector(collector);
+            double earnedCommission = expectedCommissionForCollector(collector);
             double availableEarned = commissionStatusTotal(collector, "Available");
             double released = -commissionStatusTotal(collector, "Released");
             double held = commissionStatusTotal(collector, "Held");
@@ -6007,14 +6472,18 @@ public class MainActivity extends Activity {
             double rejected = rejectedCommissionRequestAmount(collector);
             double remaining = commissionAvailable(collector);
             double withdrawable = Math.max(0, remaining - pending);
-            rows.append(tr(td(collector) + td(percent(setting.rate)) + td(String.valueOf(eligible)) +
-                    td(peso(expectedCommission)) + td(peso(withdrawable)) + td(peso(pending)) +
+            rows.append(tr(td(collector) + td(percent(setting.rate)) + td(String.valueOf(eligible)) + td(String.valueOf(activeLoans)) +
+                    td(peso(projectedCommission)) + td(peso(earnedCommission)) + td(peso(withdrawable)) + td(peso(pending)) +
                     td(peso(released)) + td(peso(rejected)) + td(peso(availableEarned)) +
-                    td(peso(held)) + td(peso(reversed)) + td(peso(remaining))));
+                    td(peso(held)) + td(peso(reversed)) + td(peso(remaining)) + td(percentWhole(collectionProgressForCollector(collector)))));
         }
-        if (rows.length() == 0) rows.append(tr("<td colspan='12'>No commission ledger entries found.</td>"));
+        if (rows.length() == 0) rows.append(tr("<td colspan='15'>No commission records found.</td>"));
+        StringBuilder loanRows = new StringBuilder();
+        for (String collector : collectors) loanRows.append(collectorLoanProgressHtmlRows(collector, 100));
         String body = reportHeader("Commission Summary Report", "Printed by: " + currentUsername()) +
-                table(new String[]{"Collector", "Rate", "Eligible Paid Loans", "Expected Commission", "Available for Withdrawal", "Pending Requests", "Released", "Rejected Requests", "Available Earned", "Held", "Reversed", "Remaining Balance"}, rows.toString());
+                table(new String[]{"Collector", "Rate", "Eligible Paid Loans", "Active Not-Yet-Paid Loans", "Expected / Projected Commission", "Earned Commission", "Available for Withdrawal", "Pending Requests", "Released", "Rejected Requests", "Available Earned", "Held", "Reversed", "Remaining Balance", "Collection Progress"}, rows.toString()) +
+                "<h2>Loan Payment / Commission Progress</h2>" +
+                table(new String[]{"Loan", "Borrower", "Principal", "Total Payable", "Valid Payments", "Payment Progress", "Projected Commission", "Earned Status", "Collector"}, loanRows.toString());
         printHtml("CommissionSummary", htmlPage("Commission Summary Report", body), "Report print/PDF generated", "report", "Commission Summary", "Generated Commission Summary Report print/PDF");
     }
 
@@ -6527,6 +6996,42 @@ public class MainActivity extends Activity {
         addCard(label, body, listener == null ? null : "Open", listener);
     }
 
+    private void addProgressCard(String title, double percent, String detail) {
+        double pct = Math.max(0, Math.min(100, percent));
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackground(roundedBg(CARD_BG, LINE, 14));
+        card.setElevation(dp(2));
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(INK);
+        t.setTextSize(16);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView label = new TextView(this);
+        label.setText(percentWhole(pct) + "  " + safe(detail));
+        label.setTextColor(MUTED);
+        label.setTextSize(13);
+        label.setPadding(0, dp(4), 0, dp(8));
+        LinearLayout track = new LinearLayout(this);
+        track.setOrientation(LinearLayout.HORIZONTAL);
+        track.setBackground(roundedBg(0xffe2e8f0, 0, 12));
+        TextView fill = new TextView(this);
+        fill.setText("");
+        fill.setBackground(roundedBg(pct >= 100 ? GREEN : (pct >= 50 ? TEAL : GOLD), 0, 12));
+        int fillWeight = Math.max(1, (int) Math.round(pct));
+        int restWeight = Math.max(1, 100 - fillWeight);
+        track.addView(fill, new LinearLayout.LayoutParams(0, dp(12), fillWeight));
+        TextView rest = new TextView(this);
+        track.addView(rest, new LinearLayout.LayoutParams(0, dp(12), restWeight));
+        card.addView(t);
+        card.addView(label);
+        card.addView(track);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, 0, 0, dp(8));
+        content.addView(card, lp);
+    }
+
     private void addDashboardAlert(String message, String status, View.OnClickListener listener) {
         addCard(statusBadge(status), message, listener == null ? null : "Review", listener);
     }
@@ -7003,6 +7508,7 @@ public class MainActivity extends Activity {
     }
     private double round2(double n) { return Math.round(n * 100.0) / 100.0; }
     private String percent(double rate) { return String.format(Locale.US, "%.2f%%", rate * 100.0); }
+    private String percentWhole(double value) { return String.format(Locale.US, "%.0f%%", Math.max(0, Math.min(100, value))); }
     private double number(EditText e) {
         try { return Double.parseDouble(text(e).replace(",", "")); } catch (Exception ex) { return 0; }
     }
